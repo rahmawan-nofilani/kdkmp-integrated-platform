@@ -1,0 +1,74 @@
+.pos-search-shell:not([aria-disabled="true"]) { background: #fff; }
+.pos-search-shell .pos-search-clear {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 0;
+  border-radius: 9px;
+  background: #eef2f5;
+  color: #667085;
+  font-size: 19px;
+  cursor: pointer;
+}
+.pos-catalog-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+.pos-product-grid {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.pos-product-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  border: 1px solid #e2e6ea;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(16,24,40,.025);
+}
+.pos-product-card.out { opacity: .68; background: #fafbfc; }
+.pos-product-topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pos-product-sku { overflow: hidden; color: #7a8794; font-size: 8px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.pos-product-stock { flex: 0 0 auto; padding: 4px 6px; border-radius: 999px; background: #edf8f2; color: var(--success); font-size: 8px; font-weight: 900; }
+.pos-product-stock.out { background: #f2f4f6; color: #7b8794; }
+.pos-product-name { margin-top: 10px; color: #293745; font-size: 12px; line-height: 1.35; }
+.pos-product-uom { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.pos-product-bottom { display: grid; gap: 3px; margin-top: auto; padding-top: 16px; }
+.pos-product-bottom strong { color: #182431; font-size: 14px; letter-spacing: -.02em; }
+.pos-product-bottom span { color: var(--muted); font-size: 9px; }
+.pos-product-add {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  gap: 1px;
+  margin-top: 10px;
+  border: 1px solid #dbe1e6;
+  border-radius: 10px;
+  background: #f6f8fa;
+  color: #65727f;
+  font-size: 10px;
+  font-weight: 900;
+}
+.pos-product-add small { font-size: 7px; font-weight: 600; }
+.pos-empty-catalog.compact { min-height: 150px; margin-top: 16px; }
+
+@media (max-width: 1180px) {
+  .pos-product-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width: 560px) {
+  .pos-catalog-summary { align-items: flex-start; }
+  .pos-product-grid { grid-template-columns: 1fr; gap: 8px; }
+  .pos-product-card { padding: 13px; }
+  .pos-product-add { min-height: 46px; }
+}
