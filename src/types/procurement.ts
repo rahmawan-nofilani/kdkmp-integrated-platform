@@ -4,6 +4,7 @@ import type { Json } from "./database";
 
 type TableShape<Row> = { Row: Row; Insert: Partial<Row>; Update: Partial<Row>; Relationships: [] };
 
+type AccountingAccountRow = { id:string; organization_id:string; organization_node_id:string; parent_account_id:string|null; code:string; name:string; account_class:string; normal_balance:string; is_posting:boolean; is_control_account:boolean; control_purpose:string|null; status:string; effective_from:string|null; effective_until:string|null; notes:string|null; created_at:string; updated_at:string };
 type SupplierRow = { id:string; organization_id:string; organization_node_id:string; code:string; name:string; legal_name:string|null; supplier_type:string; qualification_status:string; risk_status:string; payment_term_code:string|null; tax_profile_status:string; regulatory_status:string; status:string; notes:string|null; created_at:string; updated_at:string };
 type RequisitionRow = { id:string; organization_id:string; organization_node_id:string; organization_unit_id:string; requisition_number:string|null; requested_by:string|null; purpose:string|null; required_date:string|null; status:string; approval_request_id:string|null; submitted_at:string|null; decided_at:string|null; created_at:string; updated_at:string };
 type PurchaseOrderRow = { id:string; organization_id:string; organization_node_id:string; organization_unit_id:string; supplier_id:string; purchase_requisition_id:string|null; po_number:string|null; version_no:number; currency:string; expected_delivery_date:string|null; delivery_location_text:string|null; terms_snapshot:Json; supplier_snapshot:Json; status:string; approval_request_id:string|null; approved_at:string|null; sent_at:string|null; closed_at:string|null; created_by:string|null; created_at:string; updated_at:string };
@@ -14,6 +15,7 @@ type MatchResultRow = { id:string; organization_id:string; organization_node_id:
 export type ProcurementDatabase = Omit<InventoryDatabase,"public"> & {
   public: Omit<InventoryDatabase["public"],"Tables"> & {
     Tables: InventoryDatabase["public"]["Tables"] & {
+      accounting_accounts: TableShape<AccountingAccountRow>;
       suppliers: TableShape<SupplierRow>;
       purchase_requisitions: TableShape<RequisitionRow>;
       purchase_orders: TableShape<PurchaseOrderRow>;
