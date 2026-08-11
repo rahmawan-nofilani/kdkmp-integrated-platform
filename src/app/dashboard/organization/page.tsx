@@ -1,11 +1,9 @@
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrganizationPage() {
-  const { profile } = await requireAccessContext();
-  const supabase = await createClient();
+  const { profile, supabase } = await requireAccessContext();
   const organizationId = profile.organization_id;
 
   const [organizationResult, nodesResult, unitsResult, modulesResult, authorizationsResult] = await Promise.all([
