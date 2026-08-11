@@ -1,18 +1,55 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { hasPermission } from "@/lib/auth/permissions";
 import { logout } from "./actions";
 
 export const dynamic = "force-dynamic";
 
+type NavProps = {
+  canViewUsers: boolean;
+  canViewAudit: boolean;
+  mobile?: boolean;
+};
+
+function NavigationLinks({ canViewUsers, canViewAudit, mobile = false }: NavProps) {
+  const prefix = mobile ? "mobile-" : "";
+
+  return (
+    <nav className={`${prefix}nav`} aria-label={mobile ? "Navigasi ponsel" : "Navigasi utama"}>
+      <div className={`${prefix}nav-section`}>Utama</div>
+      <Link className={`${prefix}nav-link`} href="/dashboard" prefetch>
+        Dashboard
+      </Link>
+      <Link className={`${prefix}nav-link`} href="/dashboard/organization" prefetch>
+        Organisasi & Unit
+      </Link>
+
+      <div className={`${prefix}nav-section`}>Operasional</div>
+      <span className={`${prefix}nav-link disabled`}>Anggota · berikutnya</span>
+      <span className={`${prefix}nav-link disabled`}>Penjualan · berikutnya</span>
+      <span className={`${prefix}nav-link disabled`}>Persediaan · berikutnya</span>
+      <span className={`${prefix}nav-link disabled`}>Simpan Pinjam · berikutnya</span>
+
+      <div className={`${prefix}nav-section`}>Kontrol</div>
+      {canViewUsers ? (
+        <Link className={`${prefix}nav-link`} href="/dashboard/access" prefetch>
+          User & Akses
+        </Link>
+      ) : null}
+      {canViewAudit ? (
+        <Link className={`${prefix}nav-link`} href="/dashboard/audit" prefetch>
+          Audit
+        </Link>
+      ) : null}
+    </nav>
+  );
+}
+
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [{ email, profile, roles }, canViewUsers, canViewAudit] = await Promise.all([
-    requireAccessContext(),
-    hasPermission("USER_VIEW"),
-    hasPermission("AUDIT_VIEW"),
-  ]);
+  const { email, profile, roles, permissionCodes } = await requireAccessContext();
+  const canViewUsers = permissionCodes.includes("USER_VIEW");
+  const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
 
   const displayName =
     typeof profile.full_name === "string" && profile.full_name.trim().length > 0
@@ -35,33 +72,7 @@ export default async function DashboardLayout({
           <span>Integrated Management Platform</span>
         </div>
 
-        <nav className="nav" aria-label="Navigasi utama">
-          <div className="nav-section">Utama</div>
-          <Link className="nav-link" href="/dashboard">
-            <span>Dashboard</span>
-          </Link>
-          <Link className="nav-link" href="/dashboard/organization">
-            <span>Organisasi & Unit</span>
-          </Link>
-
-          <div className="nav-section">Operasional</div>
-          <span className="nav-link disabled"><span>Anggota · berikutnya</span></span>
-          <span className="nav-link disabled"><span>Penjualan · berikutnya</span></span>
-          <span className="nav-link disabled"><span>Persediaan · berikutnya</span></span>
-          <span className="nav-link disabled"><span>Simpan Pinjam · berikutnya</span></span>
-
-          <div className="nav-section">Kontrol</div>
-          {canViewUsers ? (
-            <Link className="nav-link" href="/dashboard/access">
-              <span>User & Akses</span>
-            </Link>
-          ) : null}
-          {canViewAudit ? (
-            <Link className="nav-link" href="/dashboard/audit">
-              <span>Audit</span>
-            </Link>
-          ) : null}
-        </nav>
+        <NavigationLinks canViewUsers={canViewUsers} canViewAudit={canViewAudit} />
 
         <div className="sidebar-footer">
           <small>Phase 1 · Development Environment</small>
@@ -70,6 +81,35 @@ export default async function DashboardLayout({
       </aside>
 
       <div className="workspace">
+        <div className="mobile-bar">
+          <div className="mobile-brand">
+            <strong>KDKMP</strong>
+            <span>Manager Workspace</span>
+          </div>
+
+          <details className="mobile-menu">
+            <summary className="mobile-menu-trigger" aria-label="Buka menu navigasi">
+              <span aria-hidden="true">☰</span>
+              <span>Menu</span>
+            </summary>
+            <div className="mobile-menu-panel">
+              <div className="mobile-user-card">
+                <div className="avatar" aria-hidden="true">{initials}</div>
+                <div className="mobile-user-meta">
+                  <strong>{displayName}</strong>
+                  <span>{roleLabel || email}</span>
+                </div>
+              </div>
+
+              <NavigationLinks canViewUsers={canViewUsers} canViewAudit={canViewAudit} mobile />
+
+              <form action={logout} className="mobile-logout-form">
+                <button className="mobile-logout-button" type="submit">Keluar dari aplikasi</button>
+              </form>
+            </div>
+          </details>
+        </div>
+
         <header className="topbar">
           <div className="topbar-title">
             <strong>KDKMP Digital Operating System</strong>
