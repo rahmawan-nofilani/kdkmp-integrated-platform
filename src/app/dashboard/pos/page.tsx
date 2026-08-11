@@ -69,12 +69,12 @@ export default async function PosWorkspacePage() {
   let catalogReadError = false;
 
   if (shiftReady && selectedTerminal) {
-    const catalogResult = await db.rpc("get_pos_catalog", {
-      p_terminal_id: selectedTerminal.id,
-      p_query: null,
-      p_limit: 50,
-    });
-    catalogItems = catalogResult.data ?? [];
+    const catalogResult = await db
+      .from("pos_catalog_requests")
+      .insert({ terminal_id: selectedTerminal.id, search_query: null, result_limit: 50 })
+      .select("result")
+      .single();
+    catalogItems = catalogResult.data?.result ?? [];
     catalogReadError = Boolean(catalogResult.error);
   }
 
@@ -140,7 +140,7 @@ export default async function PosWorkspacePage() {
               <h2>Pilih barang</h2>
               <p>Scan barcode dengan scanner keyboard atau ketik nama/SKU. Hanya barang dengan harga POS aktif yang tampil.</p>
             </div>
-            <span className="pos-foundation-badge">SERVER CATALOG</span>
+            <span className="pos-foundation-badge">SAFE CATALOG</span>
           </div>
 
           {shiftReady && selectedTerminal ? (
