@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
+import { hasPermission } from "@/lib/auth/permissions";
 import { logout } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -7,21 +8,23 @@ export const dynamic = "force-dynamic";
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const { email, profile, roles } = await requireAccessContext();
+  const [{ email, profile, roles }, canViewUsers, canViewAudit] = await Promise.all([
+    requireAccessContext(),
+    hasPermission("USER_VIEW"),
+    hasPermission("AUDIT_VIEW"),
+  ]);
 
   const displayName =
     typeof profile.full_name === "string" && profile.full_name.trim().length > 0
       ? profile.full_name
       : "Pengguna KDKMP";
-  const roleLabel = roles
-    .map((role: { name: string }) => role.name)
-    .join(", ");
+  const roleLabel = roles.map((role) => role.name).join(", ");
   const initials =
     displayName
       .split(" ")
       .filter(Boolean)
       .slice(0, 2)
-      .map((word: string) => word[0]?.toUpperCase())
+      .map((word) => word[0]?.toUpperCase())
       .join("") || "KD";
 
   return (
@@ -45,8 +48,14 @@ export default async function DashboardLayout({
           <span className="nav-link disabled"><span>Simpan Pinjam · berikutnya</span></span>
 
           <div className="nav-section">Kontrol</div>
-          <span className="nav-link disabled"><span>User & Akses · berikutnya</span></span>
-          <span className="nav-link disabled"><span>Audit · berikutnya</span></span>
+          {canViewUsers ? (
+            <Link className="nav-link" href="/dashboard/access">
+              <span>User & Akses</span>
+            </Link>
+          ) : null}
+          {canViewAudit ? (
+            <span className="nav-link disabled"><span>Audit · berikutnya</span></span>
+          ) : null}
         </nav>
 
         <div className="sidebar-footer">
