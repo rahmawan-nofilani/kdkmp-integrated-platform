@@ -27,6 +27,12 @@ type PosCashMovementRow = {
   movement_type:string; direction:string; amount:number; currency:string; status:string;
   reversal_of_movement_id:string|null; reason:string|null; occurred_at:string; created_by:string|null; created_at:string;
 };
+type PosReceiptRow = {
+  id:string; organization_id:string; organization_node_id:string; organization_unit_id:string;
+  sales_transaction_id:string; pos_shift_id:string; terminal_id:string; payment_intent_id:string; payment_attempt_id:string;
+  receipt_number:string; currency:string; subtotal:number; discount_amount:number; tax_amount:number; total_amount:number;
+  cash_received:number; change_amount:number|null; payload:Json; issued_at:string; created_by:string|null; created_at:string;
+};
 type PosShiftCommandRow = {
   id:string; action:string; organization_id:string|null; organization_node_id:string|null; organization_unit_id:string|null;
   terminal_id:string; opening_cash:number; notes:string|null; idempotency_key:string; result_shift_id:string|null;
@@ -48,6 +54,13 @@ type PosPaymentCommandRow = {
   sales_transaction_id:string; channel:string; provider_code:string|null; idempotency_key:string;
   result_payment_intent_id:string|null; result_payment_attempt_id:string|null; requested_by:string|null; created_at:string;
 };
+type PosCashCompletionCommandRow = {
+  id:string; organization_id:string|null; organization_node_id:string|null; organization_unit_id:string|null;
+  sales_transaction_id:string; cash_received:number; idempotency_key:string;
+  result_payment_intent_id:string|null; result_payment_attempt_id:string|null; result_inventory_movement_id:string|null;
+  result_journal_entry_id:string|null; result_cash_movement_id:string|null; result_receipt_id:string|null;
+  requested_by:string|null; created_at:string;
+};
 
 export type PosCatalogItem = {
   inventory_item_id:string;
@@ -65,6 +78,7 @@ export type PosCatalogItem = {
 };
 
 export type PosCartLine = SalesTransactionLineRow;
+export type PosReceipt = PosReceiptRow;
 
 type PosCatalogRequestRow = {
   id:string;
@@ -91,6 +105,7 @@ type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   change_pos_cart_line_quantity: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_delta:number; p_idempotency_key:string }; Returns:string };
   cancel_pos_sale: { Args: { p_sales_transaction_id:string; p_idempotency_key:string }; Returns:string };
   start_pos_payment: { Args: { p_sales_transaction_id:string; p_channel:string; p_idempotency_key:string; p_provider_code?:string|null }; Returns:{ payment_intent_id:string; payment_attempt_id:string }[] };
+  complete_cash_pos_sale: { Args: { p_sales_transaction_id:string; p_cash_received:number; p_idempotency_key:string }; Returns:{ payment_intent_id:string; payment_attempt_id:string; inventory_movement_id:string; journal_entry_id:string; cash_movement_id:string; receipt_id:string }[] };
 };
 
 export type PosDatabase = Omit<CommercialDatabase,"public"> & {
@@ -100,10 +115,12 @@ export type PosDatabase = Omit<CommercialDatabase,"public"> & {
       sales_price_lists: TableShape<SalesPriceListRow>;
       sales_price_entries: TableShape<SalesPriceEntryRow>;
       pos_cash_movements: TableShape<PosCashMovementRow>;
+      pos_receipts: TableShape<PosReceiptRow>;
       pos_shift_commands: TableShape<PosShiftCommandRow>;
       pos_sale_commands: TableShape<PosSaleCommandRow>;
       pos_sale_line_commands: TableShape<PosSaleLineCommandRow>;
       pos_payment_commands: TableShape<PosPaymentCommandRow>;
+      pos_cash_completion_commands: TableShape<PosCashCompletionCommandRow>;
       pos_catalog_requests: TableShape<PosCatalogRequestRow>;
     };
     Functions: PosFunctions;
