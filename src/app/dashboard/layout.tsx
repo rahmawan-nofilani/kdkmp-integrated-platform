@@ -37,8 +37,11 @@ export default async function DashboardLayout({
 
         <nav className="nav" aria-label="Navigasi utama">
           <div className="nav-section">Utama</div>
-          <Link className="nav-link active" href="/dashboard">
+          <Link className="nav-link" href="/dashboard">
             <span>Dashboard</span>
+          </Link>
+          <Link className="nav-link" href="/dashboard/organization">
+            <span>Organisasi & Unit</span>
           </Link>
 
           <div className="nav-section">Operasional</div>
@@ -54,7 +57,9 @@ export default async function DashboardLayout({
             </Link>
           ) : null}
           {canViewAudit ? (
-            <span className="nav-link disabled"><span>Audit · berikutnya</span></span>
+            <Link className="nav-link" href="/dashboard/audit">
+              <span>Audit</span>
+            </Link>
           ) : null}
         </nav>
 
@@ -68,7 +73,7 @@ export default async function DashboardLayout({
         <header className="topbar">
           <div className="topbar-title">
             <strong>KDKMP Digital Operating System</strong>
-            <span>Identity & Organization Foundation</span>
+            <span>Identity, Organization & Control Foundation</span>
           </div>
 
           <div className="user-box">
