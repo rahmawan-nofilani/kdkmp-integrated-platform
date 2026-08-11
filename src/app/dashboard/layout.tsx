@@ -9,6 +9,7 @@ type NavProps = {
   canViewCooperative: boolean;
   canViewMembershipFinance: boolean;
   canViewFinancialProducts: boolean;
+  canViewAccounting: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
   mobile?: boolean;
@@ -19,6 +20,7 @@ function NavigationLinks({
   canViewCooperative,
   canViewMembershipFinance,
   canViewFinancialProducts,
+  canViewAccounting,
   canViewUsers,
   canViewAudit,
   mobile = false,
@@ -36,9 +38,12 @@ function NavigationLinks({
       {canViewCooperative ? <Link className={`${prefix}nav-link`} href="/dashboard/cooperative" prefetch>Kelembagaan & RAT</Link> : null}
       {canViewMembershipFinance ? <Link className={`${prefix}nav-link`} href="/dashboard/membership-finance" prefetch>Modal Keanggotaan</Link> : null}
 
-      <div className={`${prefix}nav-section`}>Operasional</div>
+      <div className={`${prefix}nav-section`}>Keuangan</div>
+      {canViewAccounting ? <Link className={`${prefix}nav-link`} href="/dashboard/accounting" prefetch>Akuntansi</Link> : null}
       {canViewFinancialProducts ? <Link className={`${prefix}nav-link`} href="/dashboard/financial-products" prefetch>Produk Simpan Pinjam</Link> : null}
       <span className={`${prefix}nav-link disabled`}>Transaksi Simpan Pinjam · gate belum aktif</span>
+
+      <div className={`${prefix}nav-section`}>Operasional</div>
       <span className={`${prefix}nav-link disabled`}>Penjualan · berikutnya</span>
       <span className={`${prefix}nav-link disabled`}>Persediaan · berikutnya</span>
 
@@ -55,20 +60,21 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
   const canViewCooperative = permissionCodes.some((permission) => ["GOVERNANCE_VIEW", "RAT_VIEW", "SHU_VIEW"].includes(permission));
   const canViewMembershipFinance = permissionCodes.includes("MEMBERSHIP_FINANCE_VIEW");
   const canViewFinancialProducts = permissionCodes.includes("FINANCIAL_PRODUCT_VIEW");
+  const canViewAccounting = permissionCodes.includes("ACCOUNTING_VIEW");
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
 
   const displayName = typeof profile.full_name === "string" && profile.full_name.trim().length > 0 ? profile.full_name : "Pengguna KDKMP";
   const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName.split(" ").filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join("") || "KD";
-  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewUsers, canViewAudit };
+  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewAccounting, canViewUsers, canViewAudit };
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand"><strong>KDKMP</strong><span>Integrated Management Platform</span></div>
         <NavigationLinks {...navigationProps} />
-        <div className="sidebar-footer"><small>Financial Product Builder · foundation</small><small>Transaction activation: controlled gate</small></div>
+        <div className="sidebar-footer"><small>Accounting Foundation · controlled rollout</small><small>Posting GL: policy gate belum dibuka</small></div>
       </aside>
 
       <div className="workspace">
@@ -88,7 +94,7 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
         </div>
 
         <header className="topbar">
-          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Financial Product Configuration</span></div>
+          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Accounting + Financial Product Configuration</span></div>
           <div className="user-box">
             <div className="avatar" aria-hidden="true">{initials}</div>
             <div className="user-meta"><strong>{displayName}</strong><span>{roleLabel || email}</span></div>
