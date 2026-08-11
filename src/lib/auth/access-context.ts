@@ -18,6 +18,21 @@ export type AccessScope = {
   organization_unit_id: string | null;
 };
 
+type AccessContextRow = {
+  profile_id: string;
+  full_name: string | null;
+  profile_status: string;
+  organization_id: string | null;
+  roles: unknown;
+  permission_codes: string[];
+  scopes: unknown;
+};
+
+type RpcResult = {
+  data: AccessContextRow[] | null;
+  error: { message: string } | null;
+};
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
@@ -31,10 +46,14 @@ export const requireAccessContext = cache(async function requireAccessContext() 
     redirect("/login");
   }
 
-  // Keep the method invocation bound to the Supabase client instance.
-  // Extracting `supabase.rpc` into a standalone function loses its runtime
-  // client context and can throw before any network request is sent.
-  const { data, error } = await supabase.rpc("get_my_access_context");
+  // The generated database type is refreshed on schema milestones. Until that
+  // snapshot includes this new RPC, keep the cast local AND bind the method to
+  // its Supabase client instance. Calling an extracted unbound method can
+  // throw before a network request is sent.
+  const rpc = supabase.rpc.bind(supabase) as unknown as (
+    fn: "get_my_access_context",
+  ) => Promise<RpcResult>;
+  const { data, error } = await rpc("get_my_access_context");
   const context = data?.[0];
 
   if (error || !context || context.profile_status !== "ACTIVE") {
