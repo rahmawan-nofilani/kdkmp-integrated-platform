@@ -5,6 +5,7 @@ import "./design-system-v1.css";
 import "./pos-workspace.css";
 import "./pos-shift-control.css";
 import "./pos-catalog.css";
+import "./pos-cart.css";
 
 export const metadata: Metadata = {
   title: {
