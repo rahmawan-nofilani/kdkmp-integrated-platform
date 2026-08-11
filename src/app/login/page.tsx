@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 const errorMessages: Record<string, string> = {
   missing: "Email dan password wajib diisi.",
   invalid: "Email atau password tidak valid.",
+  "session-expired": "Sesi aktivasi sudah tidak berlaku. Silakan masuk kembali atau minta undangan baru.",
 };
 
 export default async function LoginPage({
