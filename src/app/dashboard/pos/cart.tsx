@@ -42,12 +42,14 @@ export function PosCart({
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [pendingLineId, setPendingLineId] = useState<string | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const [isPending, startTransition] = useTransition();
   const itemCount = lines.reduce((sum, line) => sum + Number(line.quantity), 0);
 
   function changeQuantity(lineId: string, delta: 1 | -1) {
     if (!sale || !canEdit || isPending) return;
     setMessage("");
+    setConfirmCancel(false);
     setPendingLineId(lineId);
     startTransition(async () => {
       const result = await changePosCartLineAction({ saleId: sale.id, lineId, delta });
@@ -59,12 +61,14 @@ export function PosCart({
 
   function cancelSale() {
     if (!sale || !canEdit || isPending) return;
-    if (!window.confirm("Batalkan transaksi dan kosongkan seluruh keranjang?")) return;
     setMessage("");
     startTransition(async () => {
       const result = await cancelPosCartAction(sale.id);
       setMessage(result.message);
-      if (result.status === "success") router.refresh();
+      if (result.status === "success") {
+        setConfirmCancel(false);
+        router.refresh();
+      }
     });
   }
 
@@ -97,10 +101,26 @@ export function PosCart({
           <h2>Keranjang</h2>
           <p>{itemCount} item · {sale.saleNumber ?? "Transaksi aktif"}</p>
         </div>
-        <button className="pos-cart-cancel" type="button" disabled={!canEdit || isPending} onClick={cancelSale}>
+        <button
+          className="pos-cart-cancel"
+          type="button"
+          disabled={!canEdit || isPending}
+          onClick={() => setConfirmCancel(true)}
+        >
           Batal
         </button>
       </div>
+
+      {confirmCancel ? (
+        <div className="pos-cart-confirm" role="alert">
+          <strong>Batalkan transaksi ini?</strong>
+          <span>Semua barang akan dikeluarkan dari keranjang. Tidak ada pembayaran atau pengurangan stok yang dibuat.</span>
+          <div className="pos-cart-confirm-actions">
+            <button type="button" disabled={isPending} onClick={() => setConfirmCancel(false)}>Kembali</button>
+            <button type="button" disabled={isPending} onClick={cancelSale}>{isPending ? "Memproses…" : "Ya, batalkan"}</button>
+          </div>
+        </div>
+      ) : null}
 
       {message ? <div className="pos-inline-message" role="status">{message}</div> : null}
 
