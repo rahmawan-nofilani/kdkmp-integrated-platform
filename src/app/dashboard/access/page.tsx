@@ -1,14 +1,12 @@
 import { hasPermission, requirePermission } from "@/lib/auth/permissions";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 export default async function AccessManagementPage() {
   await requirePermission("USER_VIEW");
-  const { profile: currentProfile } = await requireAccessContext();
+  const { profile: currentProfile, supabase } = await requireAccessContext();
 
-  const supabase = await createClient();
   const now = new Date().toISOString();
   const organizationId = currentProfile.organization_id;
 
@@ -94,7 +92,7 @@ export default async function AccessManagementPage() {
       <section className="dashboard-grid">
         <article className="panel">
           <h3>Kewenangan Administrasi Saat Ini</h3>
-          <p className="panel-subtitle">Dihitung langsung dari permission engine.</p>
+          <p className="panel-subtitle">Dihitung dari compact access context yang sama dengan session saat ini.</p>
           <div className="check-list">
             <div className="check-item"><span>Create operational user</span><span className={`check-state ${canCreateUser ? "" : "pending"}`}>{canCreateUser ? "ALLOW" : "DENY"}</span></div>
             <div className="check-item"><span>Assign role</span><span className={`check-state ${canAssignRole ? "" : "pending"}`}>{canAssignRole ? "ALLOW" : "DENY"}</span></div>

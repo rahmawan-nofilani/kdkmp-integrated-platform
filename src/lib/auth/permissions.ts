@@ -1,18 +1,10 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { requireAccessContext } from "./access-context";
 import type { PermissionCode } from "./permission-codes";
 
 export async function hasPermission(permission: PermissionCode) {
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc("has_permission", {
-    p_permission_code: permission,
-  });
-
-  if (error) {
-    return false;
-  }
-
-  return data === true;
+  const { permissionCodes } = await requireAccessContext();
+  return permissionCodes.includes(permission);
 }
 
 export async function requirePermission(permission: PermissionCode) {

@@ -1,12 +1,10 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const { profile } = await requireAccessContext();
-  const supabase = await createClient();
+  const { profile, supabase } = await requireAccessContext();
   const organizationId = profile.organization_id;
 
   const [
@@ -94,7 +92,7 @@ export default async function DashboardPage() {
               <h3>Operational Readiness</h3>
               <p className="panel-subtitle">Status fondasi yang sudah berjalan secara nyata.</p>
             </div>
-            <Link className="text-link" href="/dashboard/organization">Lihat organisasi</Link>
+            <Link className="text-link" href="/dashboard/organization" prefetch>Lihat organisasi</Link>
           </div>
           <div className="check-list">
             <div className="check-item"><span>Authentication & session</span><span className="check-state">READY</span></div>
@@ -152,7 +150,7 @@ export default async function DashboardPage() {
               <h3>Audit Terbaru</h3>
               <p className="panel-subtitle">Aktivitas aplikasi yang tercatat pada audit foundation.</p>
             </div>
-            <Link className="text-link" href="/dashboard/audit">Lihat audit</Link>
+            <Link className="text-link" href="/dashboard/audit" prefetch>Lihat audit</Link>
           </div>
           {recentAudit.length > 0 ? (
             <div className="check-list">
