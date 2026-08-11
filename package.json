@@ -9,7 +9,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "pretypecheck": "npm audit --omit=dev --audit-level=high",
+    "security:audit": "npm audit --omit=dev --audit-level=high",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
