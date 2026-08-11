@@ -47,19 +47,24 @@
 .pos-product-bottom strong { color: #182431; font-size: 14px; letter-spacing: -.02em; }
 .pos-product-bottom span { color: var(--muted); font-size: 9px; }
 .pos-product-add {
-  min-height: 42px;
+  min-height: 44px;
   display: grid;
   place-items: center;
   gap: 1px;
   margin-top: 10px;
-  border: 1px solid #dbe1e6;
+  border: 0;
   border-radius: 10px;
-  background: #f6f8fa;
-  color: #65727f;
+  background: var(--navy);
+  color: #fff;
   font-size: 10px;
   font-weight: 900;
+  cursor: pointer;
+  transition: transform .12s ease, opacity .12s ease;
 }
-.pos-product-add small { font-size: 7px; font-weight: 600; }
+.pos-product-add:not(:disabled):active { transform: scale(.985); }
+.pos-product-add:disabled { background: #e7ebee; color: #7b8794; cursor: not-allowed; }
+.pos-product-add small { color: rgba(255,255,255,.68); font-size: 7px; font-weight: 600; }
+.pos-product-add:disabled small { color: #98a2ad; }
 .pos-empty-catalog.compact { min-height: 150px; margin-top: 16px; }
 
 @media (max-width: 1180px) {
@@ -70,5 +75,5 @@
   .pos-catalog-summary { align-items: flex-start; }
   .pos-product-grid { grid-template-columns: 1fr; gap: 8px; }
   .pos-product-card { padding: 13px; }
-  .pos-product-add { min-height: 46px; }
+  .pos-product-add { min-height: 48px; }
 }
