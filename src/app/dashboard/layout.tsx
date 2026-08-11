@@ -19,13 +19,14 @@ type NavProps = {
   canViewApprovals: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
+  canViewCapacity: boolean;
   mobile?: boolean;
 };
 
 function NavigationLinks({
   canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts,
   canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory,
-  canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit, mobile = false,
+  canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit, canViewCapacity, mobile = false,
 }: NavProps) {
   const prefix = mobile ? "mobile-" : "";
   return (
@@ -59,6 +60,7 @@ function NavigationLinks({
       {canViewApprovals ? <Link className={`${prefix}nav-link`} href="/dashboard/approvals" prefetch>Approval & SoD</Link> : null}
       {canViewUsers ? <Link className={`${prefix}nav-link`} href="/dashboard/access" prefetch>User & Akses</Link> : null}
       {canViewAudit ? <Link className={`${prefix}nav-link`} href="/dashboard/audit" prefetch>Audit</Link> : null}
+      {canViewCapacity ? <Link className={`${prefix}nav-link`} href="/dashboard/system-capacity" prefetch>Kapasitas Sistem</Link> : null}
     </nav>
   );
 }
@@ -79,10 +81,11 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
   const canViewApprovals = permissionCodes.includes("APPROVAL_VIEW");
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
+  const canViewCapacity = permissionCodes.includes("SYSTEM_CAPACITY_VIEW");
   const displayName = typeof profile.full_name === "string" && profile.full_name.trim().length > 0 ? profile.full_name : "Pengguna KDKMP";
   const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName.split(" ").filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join("") || "KD";
-  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit };
+  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit, canViewCapacity };
 
   return (
     <div className="app-shell">
