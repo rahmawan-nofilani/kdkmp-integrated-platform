@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CommercialDatabase } from "./commercial";
+import type { Json } from "./database";
 
 type TableShape<Row, Insert = Partial<Row>, Update = Partial<Row>> = { Row: Row; Insert: Insert; Update: Update; Relationships: [] };
 
@@ -13,6 +14,12 @@ type SalesPriceEntryRow = {
   id:string; sales_price_list_id:string; organization_id:string; organization_node_id:string; organization_unit_id:string;
   inventory_item_id:string; uom_id:string; min_quantity:number; unit_price:number; status:string;
   effective_from:string|null; effective_until:string|null; created_by:string|null; created_at:string; updated_at:string;
+};
+type SalesTransactionLineRow = {
+  id:string; organization_id:string; organization_node_id:string; organization_unit_id:string;
+  sales_transaction_id:string; line_no:number; inventory_item_id:string|null; item_snapshot:Json;
+  description:string; uom_id:string|null; quantity:number; unit_price:number; discount_amount:number;
+  tax_amount:number; line_total:number|null;
 };
 type PosCashMovementRow = {
   id:string; organization_id:string; organization_node_id:string; organization_unit_id:string; pos_shift_id:string;
@@ -29,6 +36,7 @@ type PosSaleCommandRow = {
   id:string; action:string; organization_id:string|null; organization_node_id:string|null; organization_unit_id:string|null;
   terminal_id:string; pos_shift_id:string; customer_member_id:string|null; local_transaction_id:string|null; device_id:string|null;
   client_sequence:number|null; idempotency_key:string; result_sale_id:string|null; requested_by:string|null; created_at:string;
+  target_sale_id:string|null;
 };
 type PosSaleLineCommandRow = {
   id:string; action:string; organization_id:string|null; organization_node_id:string|null; organization_unit_id:string|null;
@@ -56,6 +64,8 @@ export type PosCatalogItem = {
   in_stock:boolean;
 };
 
+export type PosCartLine = SalesTransactionLineRow;
+
 type PosCatalogRequestRow = {
   id:string;
   organization_id:string|null;
@@ -76,12 +86,17 @@ type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   add_pos_sale_line: { Args: { p_sales_transaction_id:string; p_inventory_item_id:string; p_uom_id:string; p_quantity:number; p_idempotency_key:string }; Returns:string };
   update_pos_sale_line_quantity: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_quantity:number; p_idempotency_key:string }; Returns:string };
   remove_pos_sale_line: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_idempotency_key:string }; Returns:string };
+  ensure_pos_sale: { Args: { p_terminal_id:string; p_pos_shift_id:string; p_idempotency_key:string }; Returns:string };
+  add_pos_item_to_current_sale: { Args: { p_terminal_id:string; p_pos_shift_id:string; p_inventory_item_id:string; p_uom_id:string; p_quantity:number; p_idempotency_key:string }; Returns:{ sales_transaction_id:string; sales_transaction_line_id:string }[] };
+  change_pos_cart_line_quantity: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_delta:number; p_idempotency_key:string }; Returns:string };
+  cancel_pos_sale: { Args: { p_sales_transaction_id:string; p_idempotency_key:string }; Returns:string };
   start_pos_payment: { Args: { p_sales_transaction_id:string; p_channel:string; p_idempotency_key:string; p_provider_code?:string|null }; Returns:{ payment_intent_id:string; payment_attempt_id:string }[] };
 };
 
 export type PosDatabase = Omit<CommercialDatabase,"public"> & {
   public: Omit<CommercialDatabase["public"],"Tables"|"Functions"> & {
     Tables: CommercialDatabase["public"]["Tables"] & {
+      sales_transaction_lines: TableShape<SalesTransactionLineRow>;
       sales_price_lists: TableShape<SalesPriceListRow>;
       sales_price_entries: TableShape<SalesPriceEntryRow>;
       pos_cash_movements: TableShape<PosCashMovementRow>;

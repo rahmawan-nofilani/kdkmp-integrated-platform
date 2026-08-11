@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { asPosClient, type PosCatalogItem } from "@/types/pos";
+import { asPosClient, type PosCatalogItem, type PosCartLine } from "@/types/pos";
 import { PosCatalog } from "./catalog";
+import { PosCart } from "./cart";
 import { PosShiftControl } from "./shift-control";
 
 export const dynamic = "force-dynamic";
@@ -67,18 +68,52 @@ export default async function PosWorkspacePage() {
   const permissionReady = canCreateSale && canCapturePayment;
   let catalogItems: PosCatalogItem[] = [];
   let catalogReadError = false;
+  let activeSale: {
+    id: string;
+    sale_number: string | null;
+    currency: string;
+    subtotal: number;
+    discount_amount: number;
+    tax_amount: number;
+    total_amount: number;
+  } | null = null;
+  let cartLines: PosCartLine[] = [];
 
-  if (shiftReady && selectedTerminal) {
-    const catalogResult = await db
-      .from("pos_catalog_requests")
-      .insert({ terminal_id: selectedTerminal.id, search_query: null, result_limit: 50 })
-      .select("result")
-      .single();
+  if (shiftReady && selectedTerminal && ownOpenShift) {
+    const [catalogResult, activeSaleResult] = await Promise.all([
+      db
+        .from("pos_catalog_requests")
+        .insert({ terminal_id: selectedTerminal.id, search_query: null, result_limit: 50 })
+        .select("result")
+        .single(),
+      db
+        .from("sales_transactions")
+        .select("id,sale_number,currency,subtotal,discount_amount,tax_amount,total_amount")
+        .eq("pos_shift_id", ownOpenShift.id)
+        .eq("created_by", profile.id)
+        .eq("sale_type", "POS")
+        .eq("status", "DRAFT")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
     catalogItems = catalogResult.data?.result ?? [];
     catalogReadError = Boolean(catalogResult.error);
+    activeSale = activeSaleResult.data ?? null;
+
+    if (activeSale) {
+      const lineResult = await db
+        .from("sales_transaction_lines")
+        .select("id,organization_id,organization_node_id,organization_unit_id,sales_transaction_id,line_no,inventory_item_id,item_snapshot,description,uom_id,quantity,unit_price,discount_amount,tax_amount,line_total")
+        .eq("sales_transaction_id", activeSale.id)
+        .order("line_no");
+      cartLines = lineResult.data ?? [];
+    }
   }
 
   const catalogReady = shiftReady && !catalogReadError && catalogItems.length > 0;
+  const cartReady = Boolean(activeSale && cartLines.length > 0);
 
   return (
     <div className="pos-workspace">
@@ -138,19 +173,24 @@ export default async function PosWorkspacePage() {
           <div className="pos-section-heading">
             <div>
               <h2>Pilih barang</h2>
-              <p>Scan barcode dengan scanner keyboard atau ketik nama/SKU. Hanya barang dengan harga POS aktif yang tampil.</p>
+              <p>Scan barcode, ketik nama/SKU, atau tap Tambah. Harga dan stok selalu diperiksa ulang oleh server.</p>
             </div>
-            <span className="pos-foundation-badge">SAFE CATALOG</span>
+            <span className="pos-foundation-badge">CART ACTIVE</span>
           </div>
 
-          {shiftReady && selectedTerminal ? (
+          {shiftReady && selectedTerminal && ownOpenShift ? (
             catalogReadError ? (
               <div className="pos-empty-catalog compact">
                 <strong>Katalog belum dapat dibaca.</strong>
                 <span>Tidak ada akses inventory tambahan yang diberikan. Muat ulang halaman atau hubungi Manager.</span>
               </div>
             ) : (
-              <PosCatalog items={catalogItems} />
+              <PosCatalog
+                items={catalogItems}
+                terminalId={selectedTerminal.id}
+                shiftId={ownOpenShift.id}
+                canAdd={canCreateSale}
+              />
             )
           ) : (
             <div className="pos-empty-catalog compact">
@@ -161,27 +201,23 @@ export default async function PosWorkspacePage() {
         </article>
 
         <aside className="pos-cart-panel">
-          <div className="pos-section-heading compact">
-            <div>
-              <h2>Keranjang</h2>
-              <p>0 item</p>
-            </div>
-          </div>
-
-          <div className="pos-cart-empty">
-            <span className="pos-cart-empty-mark" aria-hidden="true">+</span>
-            <strong>Belum ada barang</strong>
-            <span>Cart command sudah tersedia di backend; UI tambah/ubah/hapus adalah slice berikutnya.</span>
-          </div>
-
-          <div className="pos-total-block">
-            <div><span>Subtotal</span><strong>Rp0</strong></div>
-            <div className="pos-grand-total"><span>Total</span><strong>Rp0</strong></div>
-          </div>
+          <PosCart
+            sale={activeSale ? {
+              id: activeSale.id,
+              saleNumber: activeSale.sale_number,
+              currency: activeSale.currency,
+              subtotal: activeSale.subtotal,
+              discountAmount: activeSale.discount_amount,
+              taxAmount: activeSale.tax_amount,
+              totalAmount: activeSale.total_amount,
+            } : null}
+            lines={cartLines}
+            canEdit={Boolean(shiftReady && canCreateSale)}
+          />
 
           <button className="pos-pay-button" type="button" disabled>
             Bayar
-            <small>{catalogReady && permissionReady ? "Menunggu cart + accounting completion" : "Lengkapi kesiapan transaksi"}</small>
+            <small>{cartReady ? "Menunggu payment + stock + accounting completion" : "Tambahkan barang ke keranjang"}</small>
           </button>
 
           {!shiftReady ? (
@@ -207,6 +243,7 @@ export default async function PosWorkspacePage() {
             <div className="check-item"><span>Shift kasir sendiri</span><span className={`check-state ${shiftReady ? "" : "pending"}`}>{shiftReady ? "AKTIF" : ownActiveShift ? "REVIEW" : "BELUM"}</span></div>
             <div className="check-item"><span>Izin transaksi POS</span><span className={`check-state ${permissionReady ? "" : "pending"}`}>{permissionReady ? "SIAP" : "BELUM"}</span></div>
             <div className="check-item"><span>Katalog harga + stok</span><span className={`check-state ${catalogReady ? "" : "pending"}`}>{catalogReady ? "SIAP" : "BELUM"}</span></div>
+            <div className="check-item"><span>Keranjang server-side</span><span className={`check-state ${cartReady ? "" : "pending"}`}>{cartReady ? "AKTIF" : "SIAP DIGUNAKAN"}</span></div>
             <div className="check-item"><span>Accounting + payment completion</span><span className="check-state pending">CONTROL GATE</span></div>
           </div>
         </article>
