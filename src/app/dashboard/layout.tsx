@@ -5,12 +5,20 @@ import { logout } from "./actions";
 export const dynamic = "force-dynamic";
 
 type NavProps = {
+  canViewMembers: boolean;
+  canViewCooperative: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
   mobile?: boolean;
 };
 
-function NavigationLinks({ canViewUsers, canViewAudit, mobile = false }: NavProps) {
+function NavigationLinks({
+  canViewMembers,
+  canViewCooperative,
+  canViewUsers,
+  canViewAudit,
+  mobile = false,
+}: NavProps) {
   const prefix = mobile ? "mobile-" : "";
 
   return (
@@ -23,8 +31,19 @@ function NavigationLinks({ canViewUsers, canViewAudit, mobile = false }: NavProp
         Organisasi & Unit
       </Link>
 
+      <div className={`${prefix}nav-section`}>Koperasi</div>
+      {canViewMembers ? (
+        <Link className={`${prefix}nav-link`} href="/dashboard/members" prefetch>
+          Anggota
+        </Link>
+      ) : null}
+      {canViewCooperative ? (
+        <Link className={`${prefix}nav-link`} href="/dashboard/cooperative" prefetch>
+          Kelembagaan & RAT
+        </Link>
+      ) : null}
+
       <div className={`${prefix}nav-section`}>Operasional</div>
-      <span className={`${prefix}nav-link disabled`}>Anggota · berikutnya</span>
       <span className={`${prefix}nav-link disabled`}>Penjualan · berikutnya</span>
       <span className={`${prefix}nav-link disabled`}>Persediaan · berikutnya</span>
       <span className={`${prefix}nav-link disabled`}>Simpan Pinjam · berikutnya</span>
@@ -48,6 +67,10 @@ export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const { email, profile, roles, permissionCodes } = await requireAccessContext();
+  const canViewMembers = permissionCodes.includes("MEMBER_VIEW");
+  const canViewCooperative = permissionCodes.some((permission) =>
+    ["GOVERNANCE_VIEW", "RAT_VIEW", "SHU_VIEW"].includes(permission),
+  );
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
 
@@ -64,6 +87,13 @@ export default async function DashboardLayout({
       .map((word) => word[0]?.toUpperCase())
       .join("") || "KD";
 
+  const navigationProps = {
+    canViewMembers,
+    canViewCooperative,
+    canViewUsers,
+    canViewAudit,
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -72,11 +102,11 @@ export default async function DashboardLayout({
           <span>Integrated Management Platform</span>
         </div>
 
-        <NavigationLinks canViewUsers={canViewUsers} canViewAudit={canViewAudit} />
+        <NavigationLinks {...navigationProps} />
 
         <div className="sidebar-footer">
-          <small>Phase 1 · Development Environment</small>
-          <small>Regulasi: pending validation</small>
+          <small>Phase 2 · Cooperative Core</small>
+          <small>Regulasi & AD/ART: pending validation</small>
         </div>
       </aside>
 
@@ -101,7 +131,7 @@ export default async function DashboardLayout({
                 </div>
               </div>
 
-              <NavigationLinks canViewUsers={canViewUsers} canViewAudit={canViewAudit} mobile />
+              <NavigationLinks {...navigationProps} mobile />
 
               <form action={logout} className="mobile-logout-form">
                 <button className="mobile-logout-button" type="submit">Keluar dari aplikasi</button>
@@ -113,7 +143,7 @@ export default async function DashboardLayout({
         <header className="topbar">
           <div className="topbar-title">
             <strong>KDKMP Digital Operating System</strong>
-            <span>Identity, Organization & Control Foundation</span>
+            <span>Identity, Organization, Cooperative Core & Control</span>
           </div>
 
           <div className="user-box">
