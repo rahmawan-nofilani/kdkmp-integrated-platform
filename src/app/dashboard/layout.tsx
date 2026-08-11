@@ -13,6 +13,7 @@ type NavProps = {
   canViewPayments: boolean;
   canViewAccounting: boolean;
   canViewInventory: boolean;
+  canViewProcurement: boolean;
   canViewApprovals: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
@@ -20,26 +21,14 @@ type NavProps = {
 };
 
 function NavigationLinks({
-  canViewMembers,
-  canViewCooperative,
-  canViewMembershipFinance,
-  canViewFinancialProducts,
-  canViewFinancialServices,
-  canViewPayments,
-  canViewAccounting,
-  canViewInventory,
-  canViewApprovals,
-  canViewUsers,
-  canViewAudit,
-  mobile = false,
+  canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts,
+  canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory,
+  canViewProcurement, canViewApprovals, canViewUsers, canViewAudit, mobile = false,
 }: NavProps) {
   const prefix = mobile ? "mobile-" : "";
   return (
-    <nav
-      className={`${prefix}nav`}
-      aria-label={mobile ? "Navigasi ponsel" : "Navigasi utama"}
-      style={mobile ? undefined : { flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", paddingRight: 4 }}
-    >
+    <nav className={`${prefix}nav`} aria-label={mobile ? "Navigasi ponsel" : "Navigasi utama"}
+      style={mobile ? undefined : { flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", paddingRight: 4 }}>
       <div className={`${prefix}nav-section`}>Utama</div>
       <Link className={`${prefix}nav-link`} href="/dashboard" prefetch>Dashboard</Link>
       <Link className={`${prefix}nav-link`} href="/dashboard/organization" prefetch>Organisasi & Unit</Link>
@@ -57,6 +46,7 @@ function NavigationLinks({
 
       <div className={`${prefix}nav-section`}>Operasional</div>
       {canViewInventory ? <Link className={`${prefix}nav-link`} href="/dashboard/inventory" prefetch>Persediaan & Gudang</Link> : null}
+      {canViewProcurement ? <Link className={`${prefix}nav-link`} href="/dashboard/procurement" prefetch>Pengadaan & Supplier</Link> : null}
       <span className={`${prefix}nav-link disabled`}>Penjualan · berikutnya</span>
 
       <div className={`${prefix}nav-section`}>Kontrol</div>
@@ -77,20 +67,21 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
   const canViewPayments = permissionCodes.includes("PAYMENT_VIEW") || permissionCodes.includes("TELLER_SESSION_VIEW");
   const canViewAccounting = permissionCodes.includes("ACCOUNTING_VIEW");
   const canViewInventory = permissionCodes.includes("INVENTORY_VIEW");
+  const canViewProcurement = permissionCodes.includes("PURCHASE_VIEW");
   const canViewApprovals = permissionCodes.includes("APPROVAL_VIEW");
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
   const displayName = typeof profile.full_name === "string" && profile.full_name.trim().length > 0 ? profile.full_name : "Pengguna KDKMP";
   const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName.split(" ").filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join("") || "KD";
-  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewApprovals, canViewUsers, canViewAudit };
+  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewProcurement, canViewApprovals, canViewUsers, canViewAudit };
 
   return (
     <div className="app-shell">
       <aside className="sidebar" style={{ overflow: "hidden" }}>
         <div className="sidebar-brand" style={{ flexShrink: 0 }}><strong>KDKMP</strong><span>Integrated Management Platform</span></div>
         <NavigationLinks {...navigationProps} />
-        <div className="sidebar-footer" style={{ flexShrink: 0, marginTop: 0 }}><small>Inventory & Warehouse · foundation</small><small>Direct stock overwrite: disabled</small></div>
+        <div className="sidebar-footer" style={{ flexShrink: 0, marginTop: 0 }}><small>Procurement + Inventory · foundation</small><small>PO / Receipt / Invoice controls active</small></div>
       </aside>
 
       <div className="workspace">
@@ -107,7 +98,7 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
         </div>
 
         <header className="topbar">
-          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Finance + Financial Services + Inventory Controls</span></div>
+          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Finance + Supply Chain Foundations</span></div>
           <div className="user-box"><div className="avatar" aria-hidden="true">{initials}</div><div className="user-meta"><strong>{displayName}</strong><span>{roleLabel || email}</span></div><form action={logout}><button className="logout-button" type="submit">Keluar</button></form></div>
         </header>
         <main className="content">{children}</main>
