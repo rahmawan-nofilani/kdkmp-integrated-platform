@@ -668,7 +668,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_permission: {
+        Args: { p_permission_code: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
