@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { requireAccessContext } from "@/lib/auth/access-context";
 import { logout } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -8,23 +7,10 @@ export const dynamic = "force-dynamic";
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getClaims();
-  const subject = data?.claims?.sub;
+  const { email, profile, roles } = await requireAccessContext();
 
-  if (error || !subject) {
-    redirect("/login");
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("full_name,status")
-    .eq("auth_user_id", subject)
-    .maybeSingle();
-
-  const claims = data.claims as Record<string, unknown>;
-  const email = typeof claims.email === "string" ? claims.email : "Akun KDKMP";
-  const displayName = profile?.full_name || "Pengguna KDKMP";
+  const displayName = profile.full_name || "Pengguna KDKMP";
+  const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName
     .split(" ")
     .filter(Boolean)
@@ -74,7 +60,7 @@ export default async function DashboardLayout({
             <div className="avatar" aria-hidden="true">{initials}</div>
             <div className="user-meta">
               <strong>{displayName}</strong>
-              <span>{email}</span>
+              <span>{roleLabel || email}</span>
             </div>
             <form action={logout}>
               <button className="logout-button" type="submit">Keluar</button>
