@@ -10,6 +10,7 @@ type NavProps = {
   canViewMembershipFinance: boolean;
   canViewFinancialProducts: boolean;
   canViewAccounting: boolean;
+  canViewApprovals: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
   mobile?: boolean;
@@ -21,6 +22,7 @@ function NavigationLinks({
   canViewMembershipFinance,
   canViewFinancialProducts,
   canViewAccounting,
+  canViewApprovals,
   canViewUsers,
   canViewAudit,
   mobile = false,
@@ -48,6 +50,7 @@ function NavigationLinks({
       <span className={`${prefix}nav-link disabled`}>Persediaan · berikutnya</span>
 
       <div className={`${prefix}nav-section`}>Kontrol</div>
+      {canViewApprovals ? <Link className={`${prefix}nav-link`} href="/dashboard/approvals" prefetch>Approval & SoD</Link> : null}
       {canViewUsers ? <Link className={`${prefix}nav-link`} href="/dashboard/access" prefetch>User & Akses</Link> : null}
       {canViewAudit ? <Link className={`${prefix}nav-link`} href="/dashboard/audit" prefetch>Audit</Link> : null}
     </nav>
@@ -61,20 +64,21 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
   const canViewMembershipFinance = permissionCodes.includes("MEMBERSHIP_FINANCE_VIEW");
   const canViewFinancialProducts = permissionCodes.includes("FINANCIAL_PRODUCT_VIEW");
   const canViewAccounting = permissionCodes.includes("ACCOUNTING_VIEW");
+  const canViewApprovals = permissionCodes.includes("APPROVAL_VIEW");
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
 
   const displayName = typeof profile.full_name === "string" && profile.full_name.trim().length > 0 ? profile.full_name : "Pengguna KDKMP";
   const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName.split(" ").filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join("") || "KD";
-  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewAccounting, canViewUsers, canViewAudit };
+  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewAccounting, canViewApprovals, canViewUsers, canViewAudit };
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand"><strong>KDKMP</strong><span>Integrated Management Platform</span></div>
         <NavigationLinks {...navigationProps} />
-        <div className="sidebar-footer"><small>Accounting Foundation · controlled rollout</small><small>Posting GL: policy gate belum dibuka</small></div>
+        <div className="sidebar-footer"><small>Approval & SoD Foundation</small><small>Policy activation: governance gate</small></div>
       </aside>
 
       <div className="workspace">
@@ -94,7 +98,7 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
         </div>
 
         <header className="topbar">
-          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Accounting + Financial Product Configuration</span></div>
+          <div className="topbar-title"><strong>KDKMP Digital Operating System</strong><span>Cooperative Core + Accounting + Approval Control + Financial Product Configuration</span></div>
           <div className="user-box">
             <div className="avatar" aria-hidden="true">{initials}</div>
             <div className="user-meta"><strong>{displayName}</strong><span>{roleLabel || email}</span></div>
