@@ -15,6 +15,7 @@ type NavProps = {
   canViewInventory: boolean;
   canViewProcurement: boolean;
   canViewCommercial: boolean;
+  canViewLogistics: boolean;
   canViewApprovals: boolean;
   canViewUsers: boolean;
   canViewAudit: boolean;
@@ -24,7 +25,7 @@ type NavProps = {
 function NavigationLinks({
   canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts,
   canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory,
-  canViewProcurement, canViewCommercial, canViewApprovals, canViewUsers, canViewAudit, mobile = false,
+  canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit, mobile = false,
 }: NavProps) {
   const prefix = mobile ? "mobile-" : "";
   return (
@@ -49,6 +50,7 @@ function NavigationLinks({
       {canViewCommercial ? <Link className={`${prefix}nav-link`} href="/dashboard/commercial" prefetch>Penjualan & POS</Link> : null}
       {canViewInventory ? <Link className={`${prefix}nav-link`} href="/dashboard/inventory" prefetch>Persediaan & Gudang</Link> : null}
       {canViewProcurement ? <Link className={`${prefix}nav-link`} href="/dashboard/procurement" prefetch>Pengadaan & Supplier</Link> : null}
+      {canViewLogistics ? <Link className={`${prefix}nav-link`} href="/dashboard/logistics" prefetch>Logistik & Distribusi</Link> : null}
 
       <div className={`${prefix}nav-section`}>Kontrol</div>
       {canViewApprovals ? <Link className={`${prefix}nav-link`} href="/dashboard/approvals" prefetch>Approval & SoD</Link> : null}
@@ -70,20 +72,21 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
   const canViewInventory = permissionCodes.includes("INVENTORY_VIEW");
   const canViewProcurement = permissionCodes.includes("PURCHASE_VIEW");
   const canViewCommercial = permissionCodes.includes("SALES_VIEW");
+  const canViewLogistics = permissionCodes.includes("LOGISTICS_VIEW") || permissionCodes.includes("DELIVERY_ASSIGNED_VIEW");
   const canViewApprovals = permissionCodes.includes("APPROVAL_VIEW");
   const canViewUsers = permissionCodes.includes("USER_VIEW");
   const canViewAudit = permissionCodes.includes("AUDIT_VIEW");
   const displayName = typeof profile.full_name === "string" && profile.full_name.trim().length > 0 ? profile.full_name : "Pengguna KDKMP";
   const roleLabel = roles.map((role) => role.name).join(", ");
   const initials = displayName.split(" ").filter(Boolean).slice(0, 2).map((word) => word[0]?.toUpperCase()).join("") || "KD";
-  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewProcurement, canViewCommercial, canViewApprovals, canViewUsers, canViewAudit };
+  const navigationProps = { canViewMembers, canViewCooperative, canViewMembershipFinance, canViewFinancialProducts, canViewFinancialServices, canViewPayments, canViewAccounting, canViewInventory, canViewProcurement, canViewCommercial, canViewLogistics, canViewApprovals, canViewUsers, canViewAudit };
 
   return (
     <div className="app-shell">
       <aside className="sidebar" style={{ overflow: "hidden" }}>
         <div className="sidebar-brand" style={{ flexShrink: 0 }}><strong>KDKMP</strong><span>Integrated Management Platform</span></div>
         <NavigationLinks {...navigationProps} />
-        <div className="sidebar-footer" style={{ flexShrink: 0, marginTop: 0 }}><small>Commercial + Supply Chain · foundation</small><small>Sale completion: payment + stock + accounting</small></div>
+        <div className="sidebar-footer" style={{ flexShrink: 0, marginTop: 0 }}><small>Commercial + Supply Chain · foundation</small><small>Stock · Payment · Delivery · POD traceable</small></div>
       </aside>
 
       <div className="workspace">
