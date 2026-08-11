@@ -4,8 +4,9 @@ import { requireAccessContext } from "@/lib/auth/access-context";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const { profile, supabase } = await requireAccessContext();
+  const { profile, permissionCodes, supabase } = await requireAccessContext();
   const organizationId = profile.organization_id;
+  const canViewPos = permissionCodes.includes("SALES_VIEW");
 
   const [
     organizationResult,
@@ -61,6 +62,16 @@ export default async function DashboardPage() {
         </div>
         <span className="status-pill">Development Active</span>
       </section>
+
+      {canViewPos ? (
+        <Link className="dashboard-pos-launch" href="/dashboard/pos" prefetch>
+          <span>
+            <strong>Buka POS Kasir</strong>
+            <span>Area transaksi harian dibuat sebagai workspace terpisah: cepat, sederhana, dan mobile-first.</span>
+          </span>
+          <b>Masuk POS →</b>
+        </Link>
+      ) : null}
 
       <section className="metric-grid" aria-label="Ringkasan organisasi">
         <article className="metric-card">
