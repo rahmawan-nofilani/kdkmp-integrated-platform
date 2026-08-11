@@ -41,11 +41,50 @@ export type SystemCapacitySnapshotRow = {
   created_at: string;
 };
 
+export type SystemBackupRunRow = {
+  id: string;
+  backup_run_number: string;
+  backup_type: string;
+  retention_class: string;
+  status: string;
+  storage_provider: string;
+  object_key: string | null;
+  encrypted: boolean;
+  size_bytes: number | null;
+  sha256: string | null;
+  manifest: unknown;
+  source: string;
+  started_at: string | null;
+  uploaded_at: string | null;
+  verified_at: string | null;
+  completed_at: string | null;
+  error_summary: string | null;
+  created_at: string;
+};
+
+export type SystemRestoreTestRow = {
+  id: string;
+  backup_run_id: string;
+  restore_test_number: string;
+  status: string;
+  target_type: string;
+  row_count_checks: unknown;
+  integrity_checks: unknown;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  notes: string | null;
+  error_summary: string | null;
+  created_at: string;
+};
+
 export type SystemCapacityDatabase = Omit<PosDatabase, "public"> & {
   public: Omit<PosDatabase["public"], "Tables"> & {
     Tables: PosDatabase["public"]["Tables"] & {
       zero_cost_capacity_policies: TableShape<ZeroCostCapacityPolicyRow>;
       system_capacity_snapshots: TableShape<SystemCapacitySnapshotRow>;
+      system_backup_runs: TableShape<SystemBackupRunRow>;
+      system_restore_tests: TableShape<SystemRestoreTestRow>;
     };
   };
 };

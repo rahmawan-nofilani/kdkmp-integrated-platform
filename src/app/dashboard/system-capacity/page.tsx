@@ -28,7 +28,7 @@ export default async function SystemCapacityPage() {
   const organizationId = profile.organization_id;
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [policyResult, snapshotResult, membersResult, activeMembersResult, sales30dResult] = await Promise.all([
+  const [policyResult, snapshotResult, backupResult, restoreResult, membersResult, activeMembersResult, sales30dResult] = await Promise.all([
     db
       .from("zero_cost_capacity_policies")
       .select("id,policy_code,database_normal_mb,database_warning_mb,database_archive_required_mb,database_critical_mb,database_emergency_mb,supabase_egress_target_mb,cloudflare_dynamic_target_per_day,r2_storage_target_mb,status,effective_from,notes,created_at")
@@ -40,6 +40,18 @@ export default async function SystemCapacityPage() {
       .from("system_capacity_snapshots")
       .select("id,capacity_policy_id,captured_at,database_bytes,database_mb,capacity_state,archive_bytes,backup_status,archive_status,restore_test_status,source,notes,created_at")
       .order("captured_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    db
+      .from("system_backup_runs")
+      .select("id,backup_run_number,backup_type,retention_class,status,storage_provider,object_key,encrypted,size_bytes,sha256,manifest,source,started_at,uploaded_at,verified_at,completed_at,error_summary,created_at")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    db
+      .from("system_restore_tests")
+      .select("id,backup_run_id,restore_test_number,status,target_type,row_count_checks,integrity_checks,started_at,completed_at,duration_seconds,notes,error_summary,created_at")
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
     organizationId
@@ -55,12 +67,16 @@ export default async function SystemCapacityPage() {
 
   const policy = policyResult.data;
   const snapshot = snapshotResult.data;
+  const latestBackup = backupResult.data;
+  const latestRestore = restoreResult.data;
   const memberCount = membersResult.count ?? 0;
   const activeMemberCount = activeMembersResult.count ?? 0;
   const sales30d = sales30dResult.count ?? 0;
   const currentMb = Number(snapshot?.database_mb ?? 0);
   const safeCeilingMb = Number(policy?.database_emergency_mb ?? 475);
   const usagePercent = safeCeilingMb > 0 ? Math.min((currentMb / safeCeilingMb) * 100, 100) : 0;
+  const backupState = latestBackup?.status ?? snapshot?.backup_status ?? "NOT_CONFIGURED";
+  const restoreState = latestRestore?.status ?? snapshot?.restore_test_status ?? "NOT_TESTED";
 
   return (
     <>
@@ -120,11 +136,17 @@ export default async function SystemCapacityPage() {
 
         <article className="panel">
           <h3>Backup & Archive Readiness</h3>
-          <p className="panel-subtitle">Status ini sengaja belum dibuat hijau sebelum backup dan restore benar-benar diuji.</p>
+          <p className="panel-subtitle">Registry sudah siap, tetapi status tidak akan hijau sebelum backup dan restore benar-benar diuji.</p>
           <div className="check-list">
-            <div className="check-item"><span>Backup</span><span className={`check-state ${stateClass(snapshot?.backup_status ?? "")}`}>{snapshot?.backup_status ?? "NOT_CONFIGURED"}</span></div>
+            <div className="check-item">
+              <span>Backup<small className="item-subtext">{latestBackup ? `${latestBackup.backup_run_number} · ${formatDateTime(latestBackup.created_at)}` : "Belum pernah dijalankan"}</small></span>
+              <span className={`check-state ${stateClass(backupState)}`}>{backupState}</span>
+            </div>
             <div className="check-item"><span>Cold archive</span><span className={`check-state ${stateClass(snapshot?.archive_status ?? "")}`}>{snapshot?.archive_status ?? "NOT_CONFIGURED"}</span></div>
-            <div className="check-item"><span>Restore test</span><span className={`check-state ${stateClass(snapshot?.restore_test_status ?? "")}`}>{snapshot?.restore_test_status ?? "NOT_TESTED"}</span></div>
+            <div className="check-item">
+              <span>Restore test<small className="item-subtext">{latestRestore ? `${latestRestore.restore_test_number} · ${formatDateTime(latestRestore.created_at)}` : "Belum pernah diuji"}</small></span>
+              <span className={`check-state ${stateClass(restoreState)}`}>{restoreState}</span>
+            </div>
             <div className="check-item"><span>Auto pruning</span><span className="check-state pending">DISABLED</span></div>
           </div>
         </article>
@@ -148,9 +170,10 @@ export default async function SystemCapacityPage() {
           <div className="check-list">
             <div className="check-item"><span>ZC-1 Architecture Baseline</span><span className="check-state">READY</span></div>
             <div className="check-item"><span>ZC-2 Capacity Monitor</span><span className="check-state">READ ONLY</span></div>
-            <div className="check-item"><span>ZC-3 Backup Development</span><span className="check-state pending">NEXT</span></div>
+            <div className="check-item"><span>ZC-3 Backup Registry</span><span className="check-state">READY</span></div>
+            <div className="check-item"><span>ZC-3 First Off-site Backup</span><span className="check-state pending">BUTUH OTORISASI R2</span></div>
             <div className="check-item"><span>ZC-4 Restore Drill</span><span className="check-state pending">PENDING</span></div>
-            <div className="check-item"><span>ZC-5 Cloudflare Pilot</span><span className="check-state pending">BUTUH OTORISASI NANTI</span></div>
+            <div className="check-item"><span>ZC-5 Cloudflare App Pilot</span><span className="check-state pending">PENDING</span></div>
           </div>
         </article>
       </section>
@@ -159,8 +182,9 @@ export default async function SystemCapacityPage() {
         <h3>Catatan Operasional</h3>
         <p className="panel-subtitle">
           Snapshot saat ini hanya baseline. Growth trend belum dihitung sampai kita memiliki beberapa snapshot terjadwal.
-          Tidak ada data yang akan dihapus hanya karena status berubah menjadi WARNING/CRITICAL. Archive/pruning memerlukan
-          workflow, verification, restore test, dan persetujuan terpisah.
+          Registry backup/restore sudah tersedia, tetapi belum ada backup nyata. Tidak ada data yang akan dihapus hanya
+          karena status berubah menjadi WARNING/CRITICAL. Archive/pruning memerlukan workflow, verification, restore test,
+          dan persetujuan terpisah.
         </p>
       </section>
     </>
