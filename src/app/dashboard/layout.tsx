@@ -9,14 +9,20 @@ export default async function DashboardLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const { email, profile, roles } = await requireAccessContext();
 
-  const displayName = profile.full_name || "Pengguna KDKMP";
-  const roleLabel = roles.map((role) => role.name).join(", ");
-  const initials = displayName
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase())
-    .join("") || "KD";
+  const displayName =
+    typeof profile.full_name === "string" && profile.full_name.trim().length > 0
+      ? profile.full_name
+      : "Pengguna KDKMP";
+  const roleLabel = roles
+    .map((role: { name: string }) => role.name)
+    .join(", ");
+  const initials =
+    displayName
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word: string) => word[0]?.toUpperCase())
+      .join("") || "KD";
 
   return (
     <div className="app-shell">
