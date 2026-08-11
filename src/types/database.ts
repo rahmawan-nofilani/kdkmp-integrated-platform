@@ -668,6 +668,16 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      has_data_scope: {
+        Args: {
+          p_assigned_profile_id?: string
+          p_organization_id?: string
+          p_organization_node_id?: string
+          p_organization_unit_id?: string
+          p_owner_auth_user_id?: string
+        }
+        Returns: boolean
+      }
       has_permission: {
         Args: { p_permission_code: string }
         Returns: boolean
