@@ -41,6 +41,34 @@ type PosPaymentCommandRow = {
   result_payment_intent_id:string|null; result_payment_attempt_id:string|null; requested_by:string|null; created_at:string;
 };
 
+export type PosCatalogItem = {
+  inventory_item_id:string;
+  sku:string;
+  barcode:string|null;
+  item_name:string;
+  uom_id:string;
+  uom_code:string;
+  uom_name:string;
+  factor_to_base:number;
+  unit_price:number;
+  currency:string;
+  available_quantity:number;
+  in_stock:boolean;
+};
+
+type PosCatalogRequestRow = {
+  id:string;
+  organization_id:string|null;
+  organization_node_id:string|null;
+  organization_unit_id:string|null;
+  terminal_id:string;
+  search_query:string|null;
+  result_limit:number;
+  result:PosCatalogItem[];
+  requested_by:string|null;
+  created_at:string;
+};
+
 type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   open_pos_shift: { Args: { p_terminal_id:string; p_opening_cash?:number; p_idempotency_key?:string|null; p_notes?:string|null }; Returns:string };
   close_pos_shift: { Args: { p_pos_shift_id:string; p_counted_cash:number; p_idempotency_key:string; p_notes?:string|null }; Returns:string };
@@ -61,6 +89,7 @@ export type PosDatabase = Omit<CommercialDatabase,"public"> & {
       pos_sale_commands: TableShape<PosSaleCommandRow>;
       pos_sale_line_commands: TableShape<PosSaleLineCommandRow>;
       pos_payment_commands: TableShape<PosPaymentCommandRow>;
+      pos_catalog_requests: TableShape<PosCatalogRequestRow>;
     };
     Functions: PosFunctions;
   };

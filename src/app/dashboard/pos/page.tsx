@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { asPosClient } from "@/types/pos";
+import { asPosClient, type PosCatalogItem } from "@/types/pos";
+import { PosCatalog } from "./catalog";
 import { PosShiftControl } from "./shift-control";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +65,20 @@ export default async function PosWorkspacePage() {
   const shiftReady = Boolean(ownOpenShift);
   const terminalReady = Boolean(selectedTerminal && selectedTerminal.status === "ACTIVE");
   const permissionReady = canCreateSale && canCapturePayment;
-  const cashierFoundationReady = terminalReady && permissionReady;
+  let catalogItems: PosCatalogItem[] = [];
+  let catalogReadError = false;
+
+  if (shiftReady && selectedTerminal) {
+    const catalogResult = await db
+      .from("pos_catalog_requests")
+      .insert({ terminal_id: selectedTerminal.id, search_query: null, result_limit: 50 })
+      .select("result")
+      .single();
+    catalogItems = catalogResult.data?.result ?? [];
+    catalogReadError = Boolean(catalogResult.error);
+  }
+
+  const catalogReady = shiftReady && !catalogReadError && catalogItems.length > 0;
 
   return (
     <div className="pos-workspace">
@@ -124,31 +138,26 @@ export default async function PosWorkspacePage() {
           <div className="pos-section-heading">
             <div>
               <h2>Pilih barang</h2>
-              <p>Scan barcode dan pencarian barang akan menjadi tindakan utama kasir.</p>
+              <p>Scan barcode dengan scanner keyboard atau ketik nama/SKU. Hanya barang dengan harga POS aktif yang tampil.</p>
             </div>
-            <span className="pos-foundation-badge">CONTROLLED NEXT</span>
+            <span className="pos-foundation-badge">SAFE CATALOG</span>
           </div>
 
-          <label className="pos-search-shell" aria-disabled="true">
-            <span className="pos-search-icon" aria-hidden="true">⌕</span>
-            <input disabled placeholder="Scan barcode atau cari barang…" aria-label="Cari barang" />
-          </label>
-
-          <div className="pos-shortcuts" aria-label="Aksi cepat POS">
-            <button type="button" disabled><strong>Scan</strong><span>Barcode / SKU</span></button>
-            <button type="button" disabled><strong>Favorit</strong><span>Barang cepat</span></button>
-            <button type="button" disabled><strong>Anggota</strong><span>Hubungkan pembeli</span></button>
-            <button type="button" disabled><strong>Diskon</strong><span>Sesuai izin</span></button>
-          </div>
-
-          <div className="pos-empty-catalog">
-            <strong>Buka/Tutup Shift sudah menggunakan command engine nyata.</strong>
-            <span>
-              Katalog transaksi sengaja belum dibuka sampai endpoint katalog kasir, UOM kemasan, harga jual aktif,
-              stok gerai, dan accounting mapping siap. Kasir tidak akan diberi akses Gudang yang terlalu luas hanya
-              untuk mencari barang.
-            </span>
-          </div>
+          {shiftReady && selectedTerminal ? (
+            catalogReadError ? (
+              <div className="pos-empty-catalog compact">
+                <strong>Katalog belum dapat dibaca.</strong>
+                <span>Tidak ada akses inventory tambahan yang diberikan. Muat ulang halaman atau hubungi Manager.</span>
+              </div>
+            ) : (
+              <PosCatalog items={catalogItems} />
+            )
+          ) : (
+            <div className="pos-empty-catalog compact">
+              <strong>Buka shift untuk melihat katalog.</strong>
+              <span>Katalog POS hanya tersedia ketika kasir memiliki shift sendiri yang sedang aktif.</span>
+            </div>
+          )}
         </article>
 
         <aside className="pos-cart-panel">
@@ -162,7 +171,7 @@ export default async function PosWorkspacePage() {
           <div className="pos-cart-empty">
             <span className="pos-cart-empty-mark" aria-hidden="true">+</span>
             <strong>Belum ada barang</strong>
-            <span>Barang yang dipilih akan muncul di sini.</span>
+            <span>Cart command sudah tersedia di backend; UI tambah/ubah/hapus adalah slice berikutnya.</span>
           </div>
 
           <div className="pos-total-block">
@@ -172,7 +181,7 @@ export default async function PosWorkspacePage() {
 
           <button className="pos-pay-button" type="button" disabled>
             Bayar
-            <small>{shiftReady && cashierFoundationReady ? "Menunggu katalog + completion gate" : "Buka shift dan lengkapi kesiapan POS"}</small>
+            <small>{catalogReady && permissionReady ? "Menunggu cart + accounting completion" : "Lengkapi kesiapan transaksi"}</small>
           </button>
 
           {!shiftReady ? (
@@ -197,7 +206,8 @@ export default async function PosWorkspacePage() {
             <div className="check-item"><span>Terminal aktif</span><span className={`check-state ${terminalReady ? "" : "pending"}`}>{terminalReady ? "SIAP" : "BELUM"}</span></div>
             <div className="check-item"><span>Shift kasir sendiri</span><span className={`check-state ${shiftReady ? "" : "pending"}`}>{shiftReady ? "AKTIF" : ownActiveShift ? "REVIEW" : "BELUM"}</span></div>
             <div className="check-item"><span>Izin transaksi POS</span><span className={`check-state ${permissionReady ? "" : "pending"}`}>{permissionReady ? "SIAP" : "BELUM"}</span></div>
-            <div className="check-item"><span>Harga + stok + accounting completion</span><span className="check-state pending">CONTROL GATE</span></div>
+            <div className="check-item"><span>Katalog harga + stok</span><span className={`check-state ${catalogReady ? "" : "pending"}`}>{catalogReady ? "SIAP" : "BELUM"}</span></div>
+            <div className="check-item"><span>Accounting + payment completion</span><span className="check-state pending">CONTROL GATE</span></div>
           </div>
         </article>
 
