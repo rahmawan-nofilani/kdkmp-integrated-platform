@@ -41,6 +41,21 @@ type PosPaymentCommandRow = {
   result_payment_intent_id:string|null; result_payment_attempt_id:string|null; requested_by:string|null; created_at:string;
 };
 
+export type PosCatalogItem = {
+  inventory_item_id:string;
+  sku:string;
+  barcode:string|null;
+  item_name:string;
+  uom_id:string;
+  uom_code:string;
+  uom_name:string;
+  factor_to_base:number;
+  unit_price:number;
+  currency:string;
+  available_quantity:number;
+  in_stock:boolean;
+};
+
 type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   open_pos_shift: { Args: { p_terminal_id:string; p_opening_cash?:number; p_idempotency_key?:string|null; p_notes?:string|null }; Returns:string };
   close_pos_shift: { Args: { p_pos_shift_id:string; p_counted_cash:number; p_idempotency_key:string; p_notes?:string|null }; Returns:string };
@@ -49,6 +64,7 @@ type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   update_pos_sale_line_quantity: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_quantity:number; p_idempotency_key:string }; Returns:string };
   remove_pos_sale_line: { Args: { p_sales_transaction_id:string; p_sales_transaction_line_id:string; p_idempotency_key:string }; Returns:string };
   start_pos_payment: { Args: { p_sales_transaction_id:string; p_channel:string; p_idempotency_key:string; p_provider_code?:string|null }; Returns:{ payment_intent_id:string; payment_attempt_id:string }[] };
+  get_pos_catalog: { Args: { p_terminal_id:string; p_query?:string|null; p_limit?:number }; Returns:PosCatalogItem[] };
 };
 
 export type PosDatabase = Omit<CommercialDatabase,"public"> & {
