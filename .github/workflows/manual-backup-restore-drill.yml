@@ -1,0 +1,232 @@
+name: Manual Backup & Restore Drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-backup-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  backup_restore_drill:
+    name: encrypted backup + local restore verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "Missing GitHub Actions secret: SUPABASE_DB_URL" >&2
+            exit 1
+          fi
+          if [ -z "${BACKUP_ENCRYPTION_PASSPHRASE:-}" ]; then
+            echo "Missing GitHub Actions secret: BACKUP_ENCRYPTION_PASSPHRASE" >&2
+            exit 1
+          fi
+          if [ "${#BACKUP_ENCRYPTION_PASSPHRASE}" -lt 24 ]; then
+            echo "BACKUP_ENCRYPTION_PASSPHRASE must be at least 24 characters." >&2
+            exit 1
+          fi
+
+      - name: Create backup run registry
+        id: registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          RUN_NUMBER="BKP-${STAMP}-${GITHUB_RUN_ID}"
+          BACKUP_ID="$(docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA')) returning id;")"
+          printf '%s' "$BACKUP_ID" > "$RUNNER_TEMP/backup-run-id.txt"
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='RUNNING' where id='$BACKUP_ID';"
+          echo "backup_id=$BACKUP_ID" >> "$GITHUB_OUTPUT"
+          echo "run_number=$RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+
+      - name: Dump DEVELOPMENT database
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-${{ steps.registry.outputs.stamp }}"
+          mkdir -p "$BACKUP_DIR"
+
+          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/roles.sql" --role-only
+          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/schema.sql"
+          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_schema.sql" --schema supabase_migrations
+          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_data.sql" --use-copy --data-only --schema supabase_migrations
+
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "select jsonb_build_object('auth_users',(select count(*) from auth.users),'profiles',(select count(*) from public.profiles),'members',(select count(*) from public.members),'sales_transactions',(select count(*) from public.sales_transactions),'journal_entries',(select count(*) from public.journal_entries),'inventory_movements',(select count(*) from public.inventory_movements),'pos_receipts',(select count(*) from public.pos_receipts),'backup_runs',(select count(*) from public.system_backup_runs))::text;" > "$BACKUP_DIR/source_counts.json"
+
+          test -s "$BACKUP_DIR/roles.sql"
+          test -s "$BACKUP_DIR/schema.sql"
+          test -s "$BACKUP_DIR/data.sql"
+          test -s "$BACKUP_DIR/source_counts.json"
+
+      - name: Start isolated local Supabase restore target
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCAL_DIR="$RUNNER_TEMP/kdkmp-restore-target"
+          mkdir -p "$LOCAL_DIR"
+          cd "$LOCAL_DIR"
+          npx --yes supabase@latest init --force
+          npx --yes supabase@latest start
+          DB_CONTAINER="$(docker ps --filter 'name=supabase_db_' --format '{{.Names}}' | head -n 1)"
+          if [ -z "$DB_CONTAINER" ]; then
+            echo "Local Supabase database container was not found." >&2
+            exit 1
+          fi
+          printf '%s' "$DB_CONTAINER" > "$RUNNER_TEMP/local-db-container.txt"
+
+      - name: Restore backup into isolated local Supabase
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          START_EPOCH="$(date +%s)"
+          BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
+          STAMP="${{ steps.registry.outputs.stamp }}"
+          BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-$STAMP"
+          DB_CONTAINER="$(cat "$RUNNER_TEMP/local-db-container.txt")"
+          RESTORE_NUMBER="RST-${STAMP}-${GITHUB_RUN_ID}"
+
+          RESTORE_ID="$(docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_restore_tests(backup_run_id,restore_test_number,status,target_type,notes) values ('$BACKUP_ID','$RESTORE_NUMBER','REQUESTED','TEMPORARY_LOCAL','GitHub Actions isolated local Supabase restore drill') returning id;")"
+          printf '%s' "$RESTORE_ID" > "$RUNNER_TEMP/restore-test-id.txt"
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='RUNNING' where id='$RESTORE_ID';"
+
+          for file in roles.sql schema.sql data.sql history_schema.sql history_data.sql; do
+            docker cp "$BACKUP_DIR/$file" "$DB_CONTAINER:/tmp/$file"
+          done
+
+          docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -c "alter default privileges in schema public revoke all on tables from anon, authenticated;"
+          docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X --single-transaction -v ON_ERROR_STOP=1 \
+            --file /tmp/roles.sql \
+            --file /tmp/schema.sql \
+            --command "set session_replication_role = replica" \
+            --file /tmp/data.sql
+
+          docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X --single-transaction -v ON_ERROR_STOP=1 \
+            --file /tmp/history_schema.sql \
+            --file /tmp/history_data.sql
+
+          docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X -qAt -v ON_ERROR_STOP=1 -c "select jsonb_build_object('auth_users',(select count(*) from auth.users),'profiles',(select count(*) from public.profiles),'members',(select count(*) from public.members),'sales_transactions',(select count(*) from public.sales_transactions),'journal_entries',(select count(*) from public.journal_entries),'inventory_movements',(select count(*) from public.inventory_movements),'pos_receipts',(select count(*) from public.pos_receipts),'backup_runs',(select count(*) from public.system_backup_runs))::text;" > "$BACKUP_DIR/restored_counts.json"
+
+          jq -S . "$BACKUP_DIR/source_counts.json" > "$BACKUP_DIR/source_counts.sorted.json"
+          jq -S . "$BACKUP_DIR/restored_counts.json" > "$BACKUP_DIR/restored_counts.sorted.json"
+          diff -u "$BACKUP_DIR/source_counts.sorted.json" "$BACKUP_DIR/restored_counts.sorted.json"
+
+          UNVALIDATED_FK="$(docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X -qAt -v ON_ERROR_STOP=1 -c "select count(*) from pg_constraint where contype='f' and not convalidated and connamespace in ('public'::regnamespace,'app_private'::regnamespace);")"
+          if [ "$UNVALIDATED_FK" != "0" ]; then
+            echo "Restore target contains $UNVALIDATED_FK unvalidated foreign keys." >&2
+            exit 1
+          fi
+
+          END_EPOCH="$(date +%s)"
+          DURATION="$((END_EPOCH - START_EPOCH))"
+          SOURCE_JSON="$(jq -c . "$BACKUP_DIR/source_counts.json")"
+          RESTORED_JSON="$(jq -c . "$BACKUP_DIR/restored_counts.json")"
+          CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase"}')"
+
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched.' where id='$RESTORE_ID';"
+          echo "restore_id=$RESTORE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Build encrypted artifact
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAMP="${{ steps.registry.outputs.stamp }}"
+          BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-$STAMP"
+          PACKAGE_DIR="$RUNNER_TEMP/kdkmp-package-$STAMP"
+          mkdir -p "$PACKAGE_DIR"
+
+          (
+            cd "$BACKUP_DIR"
+            sha256sum roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json > FILES.sha256
+          )
+
+          jq -n \
+            --arg backup_run_number "${{ steps.registry.outputs.run_number }}" \
+            --arg github_run_id "$GITHUB_RUN_ID" \
+            --arg github_sha "$GITHUB_SHA" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg source_counts "$(jq -c . "$BACKUP_DIR/source_counts.json")" \
+            --arg restored_counts "$(jq -c . "$BACKUP_DIR/restored_counts.json")" \
+            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson)}' \
+            > "$BACKUP_DIR/manifest.json"
+
+          TAR_PATH="$PACKAGE_DIR/kdkmp-development-$STAMP.tar.gz"
+          ENC_PATH="$TAR_PATH.enc"
+          tar -C "$BACKUP_DIR" -czf "$TAR_PATH" roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json FILES.sha256 manifest.json
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$TAR_PATH" -out "$ENC_PATH" -pass env:BACKUP_ENCRYPTION_PASSPHRASE
+          rm -f "$TAR_PATH"
+
+          SHA="$(sha256sum "$ENC_PATH" | awk '{print $1}')"
+          SIZE="$(stat -c '%s' "$ENC_PATH")"
+          printf '%s  %s\n' "$SHA" "$(basename "$ENC_PATH")" > "$ENC_PATH.sha256"
+
+          OBJECT_KEY="github-artifact://actions/runs/$GITHUB_RUN_ID/$(basename "$ENC_PATH")"
+          BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
+          MANIFEST_JSON="$(jq -c . "$BACKUP_DIR/manifest.json")"
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='UPLOADED',object_key='$OBJECT_KEY',size_bytes=$SIZE,sha256='$SHA',manifest='$MANIFEST_JSON'::jsonb where id='$BACKUP_ID';"
+
+          echo "artifact_path=$ENC_PATH" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$ENC_PATH.sha256" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=kdkmp-development-backup-$STAMP" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=$SIZE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload encrypted backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            ${{ steps.package.outputs.artifact_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Mark backup verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
+          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED' where id='$BACKUP_ID';"
+
+      - name: Mark registry failed when workflow fails
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${SUPABASE_DB_URL:-}" ] && [ -f "$RUNNER_TEMP/restore-test-id.txt" ]; then
+            RESTORE_ID="$(cat "$RUNNER_TEMP/restore-test-id.txt")"
+            docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -c "update public.system_restore_tests set status='FAILED',error_summary='GitHub Actions restore drill failed; inspect workflow logs.' where id='$RESTORE_ID' and status in ('REQUESTED','RUNNING');" || true
+          fi
+          if [ -n "${SUPABASE_DB_URL:-}" ] && [ -f "$RUNNER_TEMP/backup-run-id.txt" ]; then
+            BACKUP_ID="$(cat "$RUNNER_TEMP/backup-run-id.txt")"
+            docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -c "update public.system_backup_runs set status='FAILED',error_summary='GitHub Actions backup workflow failed; inspect workflow logs.' where id='$BACKUP_ID' and status in ('REQUESTED','RUNNING','UPLOADED');" || true
+          fi
+
+      - name: Stop local Supabase
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          LOCAL_DIR="$RUNNER_TEMP/kdkmp-restore-target"
+          if [ -d "$LOCAL_DIR/supabase" ]; then
+            cd "$LOCAL_DIR"
+            npx --yes supabase@latest stop --no-backup || true
+          fi
