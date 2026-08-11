@@ -3,6 +3,7 @@ import "./globals.css";
 import "./manager-command-center.css";
 import "./design-system-v1.css";
 import "./pos-workspace.css";
+import "./pos-shift-control.css";
 
 export const metadata: Metadata = {
   title: {
