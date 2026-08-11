@@ -63,7 +63,7 @@ begin
       organization_id,organization_node_id,inventory_item_id,lot_code,manufacture_date,expiry_date,supplier_lot_reference,status
     ) values(
       v_terminal.organization_id,v_terminal.organization_node_id,v_item.id,
-      'DEMO-LOT-202608-'||replace(v_item.sku,'DEMO-','),
+      'DEMO-LOT-202608-'||replace(v_item.sku,'DEMO-',''),
       '2026-08-01',
       case when v_item.sku='DEMO-MINYAK-1L' then '2027-08-01'::date else null end,
       'DEVELOPMENT SYNTHETIC LOT','ACTIVE'
