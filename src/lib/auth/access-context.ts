@@ -46,9 +46,11 @@ export const requireAccessContext = cache(async function requireAccessContext() 
     redirect("/login");
   }
 
-  // The generated database type is refreshed on schema milestones. Keep this
-  // narrow cast local so the rest of the application remains fully typed.
-  const rpc = supabase.rpc as unknown as (
+  // The generated database type is refreshed on schema milestones. Until that
+  // snapshot includes this new RPC, keep the cast local AND bind the method to
+  // its Supabase client instance. Calling an extracted unbound method can
+  // throw before a network request is sent.
+  const rpc = supabase.rpc.bind(supabase) as unknown as (
     fn: "get_my_access_context",
   ) => Promise<RpcResult>;
   const { data, error } = await rpc("get_my_access_context");
