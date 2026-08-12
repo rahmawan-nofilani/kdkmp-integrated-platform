@@ -125,6 +125,51 @@ jobs:
           test -s "$BACKUP_DIR/data.sql"
           test -s "$BACKUP_DIR/source_counts.json"
 
+      - name: Prepare portable role restore file
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-${{ steps.registry.outputs.stamp }}"
+          export BACKUP_DIR
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          backup_dir = Path(os.environ["BACKUP_DIR"])
+          source_path = backup_dir / "roles.sql"
+          restore_path = backup_dir / "roles.restore.sql"
+          report_path = backup_dir / "restore_sanitization.json"
+
+          source = source_path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"^[ \t]*ALTER\s+ROLE\b(?:(?!;).)*?\bSET\b(?:(?!;).)*?;[ \t]*(?:\r?\n)?",
+              re.IGNORECASE | re.MULTILINE | re.DOTALL,
+          )
+          removed = pattern.findall(source)
+          portable = pattern.sub("", source)
+
+          if not portable.strip():
+              raise SystemExit("Portable roles restore file would be empty; refusing to continue.")
+          if pattern.search(portable):
+              raise SystemExit("Portable roles restore file still contains ALTER ROLE ... SET statements.")
+
+          restore_path.write_text(portable, encoding="utf-8")
+          report = {
+              "policy": "remove_alter_role_set_for_local_restore_only",
+              "removed_statement_count": len(removed),
+              "original_roles_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+              "portable_roles_sha256": hashlib.sha256(portable.encode("utf-8")).hexdigest(),
+              "original_roles_preserved": True,
+          }
+          report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
+          print(f"Prepared portable roles restore file; removed {len(removed)} environment-specific ALTER ROLE ... SET statement(s).")
+          PY
+          test -s "$BACKUP_DIR/roles.restore.sql"
+          test -s "$BACKUP_DIR/restore_sanitization.json"
+
       - name: Start isolated local Supabase restore target
         shell: bash
         run: |
@@ -157,13 +202,13 @@ jobs:
           printf '%s' "$RESTORE_ID" > "$RUNNER_TEMP/restore-test-id.txt"
           docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='RUNNING' where id='$RESTORE_ID';"
 
-          for file in roles.sql schema.sql data.sql history_schema.sql history_data.sql; do
+          for file in roles.restore.sql schema.sql data.sql history_schema.sql history_data.sql; do
             docker cp "$BACKUP_DIR/$file" "$DB_CONTAINER:/tmp/$file"
           done
 
           docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -c "alter default privileges in schema public revoke all on tables from anon, authenticated;"
           docker exec "$DB_CONTAINER" psql -U postgres -d postgres -X --single-transaction -v ON_ERROR_STOP=1 \
-            --file /tmp/roles.sql \
+            --file /tmp/roles.restore.sql \
             --file /tmp/schema.sql \
             --command "set session_replication_role = replica" \
             --file /tmp/data.sql
@@ -188,9 +233,9 @@ jobs:
           DURATION="$((END_EPOCH - START_EPOCH))"
           SOURCE_JSON="$(jq -c . "$BACKUP_DIR/source_counts.json")"
           RESTORED_JSON="$(jq -c . "$BACKUP_DIR/restored_counts.json")"
-          CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase"}')"
+          CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" --argjson role_sanitization "$(cat "$BACKUP_DIR/restore_sanitization.json")" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase",role_sanitization:$role_sanitization}')"
 
-          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched.' where id='$RESTORE_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched; managed role settings were sanitized only for the local restore target.' where id='$RESTORE_ID';"
           echo "restore_id=$RESTORE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build encrypted artifact
@@ -205,7 +250,7 @@ jobs:
 
           (
             cd "$BACKUP_DIR"
-            sha256sum roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json > FILES.sha256
+            sha256sum roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json restore_sanitization.json > FILES.sha256
           )
 
           jq -n \
@@ -215,12 +260,13 @@ jobs:
             --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg source_counts "$(jq -c . "$BACKUP_DIR/source_counts.json")" \
             --arg restored_counts "$(jq -c . "$BACKUP_DIR/restored_counts.json")" \
-            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson)}' \
+            --arg role_sanitization "$(jq -c . "$BACKUP_DIR/restore_sanitization.json")" \
+            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson),role_sanitization:($role_sanitization|fromjson)}' \
             > "$BACKUP_DIR/manifest.json"
 
           TAR_PATH="$PACKAGE_DIR/kdkmp-development-$STAMP.tar.gz"
           ENC_PATH="$TAR_PATH.enc"
-          tar -C "$BACKUP_DIR" -czf "$TAR_PATH" roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json FILES.sha256 manifest.json
+          tar -C "$BACKUP_DIR" -czf "$TAR_PATH" roles.sql schema.sql data.sql history_schema.sql history_data.sql source_counts.json restored_counts.json restore_sanitization.json FILES.sha256 manifest.json
           openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in "$TAR_PATH" -out "$ENC_PATH" -pass env:BACKUP_ENCRYPTION_PASSPHRASE
           rm -f "$TAR_PATH"
 
