@@ -144,46 +144,189 @@ jobs:
           report_path = backup_dir / "restore_sanitization.json"
 
           source = source_path.read_text(encoding="utf-8")
-          alter_role_pattern = re.compile(
-              r"^[ \t]*ALTER\s+ROLE\b(?:(?!;).)*?\bSET\b(?:(?!;).)*?;[ \t]*(?:\r?\n)?",
-              re.IGNORECASE | re.MULTILINE | re.DOTALL,
-          )
-          session_log_pattern = re.compile(
-              r"^[ \t]*SET\s+log_min_messages\s*(?:=|TO)\s*[^;]+;[ \t]*(?:\r?\n)?",
-              re.IGNORECASE | re.MULTILINE,
-          )
 
-          removed_alter_role = alter_role_pattern.findall(source)
-          portable = alter_role_pattern.sub("", source)
-          removed_session_log = session_log_pattern.findall(portable)
-          portable = session_log_pattern.sub("", portable)
+          dollar_tag_re = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 
+          def split_sql_statements(text: str):
+              statements = []
+              start = 0
+              i = 0
+              state = "normal"
+              dollar_tag = None
+              block_depth = 0
+
+              while i < len(text):
+                  ch = text[i]
+                  nxt = text[i + 1] if i + 1 < len(text) else ""
+
+                  if state == "normal":
+                      if ch == "-" and nxt == "-":
+                          state = "line_comment"
+                          i += 2
+                          continue
+                      if ch == "/" and nxt == "*":
+                          state = "block_comment"
+                          block_depth = 1
+                          i += 2
+                          continue
+                      if ch == "'":
+                          state = "single_quote"
+                          i += 1
+                          continue
+                      if ch == '"':
+                          state = "double_quote"
+                          i += 1
+                          continue
+                      if ch == "$":
+                          match = dollar_tag_re.match(text, i)
+                          if match:
+                              dollar_tag = match.group(0)
+                              state = "dollar_quote"
+                              i = match.end()
+                              continue
+                      if ch == ";":
+                          statements.append(text[start:i + 1])
+                          start = i + 1
+                      i += 1
+                      continue
+
+                  if state == "line_comment":
+                      if ch == "\n":
+                          state = "normal"
+                      i += 1
+                      continue
+
+                  if state == "block_comment":
+                      if ch == "/" and nxt == "*":
+                          block_depth += 1
+                          i += 2
+                          continue
+                      if ch == "*" and nxt == "/":
+                          block_depth -= 1
+                          i += 2
+                          if block_depth == 0:
+                              state = "normal"
+                          continue
+                      i += 1
+                      continue
+
+                  if state == "single_quote":
+                      if ch == "'" and nxt == "'":
+                          i += 2
+                          continue
+                      if ch == "'":
+                          state = "normal"
+                      i += 1
+                      continue
+
+                  if state == "double_quote":
+                      if ch == '"' and nxt == '"':
+                          i += 2
+                          continue
+                      if ch == '"':
+                          state = "normal"
+                      i += 1
+                      continue
+
+                  if state == "dollar_quote":
+                      if dollar_tag and text.startswith(dollar_tag, i):
+                          i += len(dollar_tag)
+                          dollar_tag = None
+                          state = "normal"
+                          continue
+                      i += 1
+                      continue
+
+              if state not in {"normal", "line_comment"}:
+                  raise SystemExit(f"roles.sql ended inside an unterminated SQL construct: {state}")
+
+              if start < len(text):
+                  statements.append(text[start:])
+              return statements
+
+          statements = split_sql_statements(source)
+          kept = []
+          removed_statement_count = 0
+          removed_alter_role_set_count = 0
+          removed_log_min_messages_statement_count = 0
+
+          alter_role_set_re = re.compile(r"\bALTER\s+(?:ROLE|USER)\b[\s\S]*?\bSET\b", re.IGNORECASE)
+          log_min_messages_re = re.compile(r"\blog_min_messages\b", re.IGNORECASE)
+
+          for statement in statements:
+              has_alter_role_set = bool(alter_role_set_re.search(statement))
+              has_log_min_messages = bool(log_min_messages_re.search(statement))
+
+              if has_alter_role_set or has_log_min_messages:
+                  removed_statement_count += 1
+                  if has_alter_role_set:
+                      removed_alter_role_set_count += 1
+                  if has_log_min_messages:
+                      removed_log_min_messages_statement_count += 1
+                  continue
+
+              kept.append(statement)
+
+          portable = "".join(kept)
           if not portable.strip():
               raise SystemExit("Portable roles restore file would be empty; refusing to continue.")
-          if alter_role_pattern.search(portable):
-              raise SystemExit("Portable roles restore file still contains ALTER ROLE ... SET statements.")
-          if re.search(r"^[ \t]*SET\s+log_min_messages\b", portable, re.IGNORECASE | re.MULTILINE):
-              raise SystemExit("Portable roles restore file still contains standalone SET log_min_messages.")
+
+          portable_statements = split_sql_statements(portable)
+          if any(alter_role_set_re.search(statement) for statement in portable_statements):
+              raise SystemExit("Portable roles restore file still contains ALTER ROLE/USER ... SET statement(s).")
+          if any(log_min_messages_re.search(statement) for statement in portable_statements):
+              raise SystemExit("Portable roles restore file still contains a statement referencing log_min_messages.")
 
           restore_path.write_text(portable, encoding="utf-8")
           report = {
-              "policy": "remove_managed_role_settings_for_local_restore_only",
-              "removed_alter_role_set_count": len(removed_alter_role),
-              "removed_session_log_min_messages_count": len(removed_session_log),
-              "removed_statement_count": len(removed_alter_role) + len(removed_session_log),
+              "policy": "statement_based_remove_managed_role_settings_for_local_restore_only",
+              "parser": "semicolon_aware_with_sql_quotes_comments_and_dollar_quoting",
+              "source_statement_count": len(statements),
+              "portable_statement_count": len(portable_statements),
+              "removed_statement_count": removed_statement_count,
+              "removed_alter_role_set_count": removed_alter_role_set_count,
+              "removed_log_min_messages_statement_count": removed_log_min_messages_statement_count,
               "original_roles_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
               "portable_roles_sha256": hashlib.sha256(portable.encode("utf-8")).hexdigest(),
               "original_roles_preserved": True,
           }
           report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
           print(
-              "Prepared portable roles restore file; removed "
-              f"{len(removed_alter_role)} ALTER ROLE ... SET statement(s) and "
-              f"{len(removed_session_log)} standalone SET log_min_messages statement(s)."
+              "Prepared statement-based portable roles restore file; removed "
+              f"{removed_statement_count} managed-setting statement(s), including "
+              f"{removed_log_min_messages_statement_count} referencing log_min_messages."
           )
           PY
           test -s "$BACKUP_DIR/roles.restore.sql"
           test -s "$BACKUP_DIR/restore_sanitization.json"
+
+      - name: Preflight portable role restore file
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-${{ steps.registry.outputs.stamp }}"
+          export BACKUP_DIR
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          backup_dir = Path(os.environ["BACKUP_DIR"])
+          portable = (backup_dir / "roles.restore.sql").read_text(encoding="utf-8")
+          report = json.loads((backup_dir / "restore_sanitization.json").read_text(encoding="utf-8"))
+
+          if not report.get("original_roles_preserved"):
+              raise SystemExit("Restore sanitization report does not confirm preservation of original roles.sql.")
+          if report.get("removed_statement_count", 0) < 1:
+              raise SystemExit("Restore sanitizer removed no managed-setting statements; refusing local restore because prior drills proved managed settings are present.")
+          if re.search(r"\blog_min_messages\b", portable, re.IGNORECASE):
+              raise SystemExit("Preflight failed: roles.restore.sql still references log_min_messages.")
+          if re.search(r"\bALTER\s+(?:ROLE|USER)\b[\s\S]*?\bSET\b", portable, re.IGNORECASE):
+              raise SystemExit("Preflight failed: roles.restore.sql still contains ALTER ROLE/USER ... SET.")
+
+          print("Portable role restore preflight passed before local Supabase startup.")
+          PY
 
       - name: Start isolated local Supabase restore target
         shell: bash
