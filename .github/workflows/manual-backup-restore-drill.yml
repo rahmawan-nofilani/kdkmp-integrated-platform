@@ -18,10 +18,22 @@ jobs:
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+      SUPABASE_CLI_VERSION: "2.113.0"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI version
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          if [ "$ACTUAL_VERSION" != "$SUPABASE_CLI_VERSION" ]; then
+            echo "Pinned Supabase CLI version mismatch: expected $SUPABASE_CLI_VERSION, got $ACTUAL_VERSION" >&2
+            exit 1
+          fi
+          echo "Using pinned Supabase CLI $ACTUAL_VERSION"
 
       - name: Validate required secrets and database URL shape
         shell: bash
@@ -98,7 +110,7 @@ jobs:
           set -euo pipefail
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           RUN_NUMBER="BKP-${STAMP}-${GITHUB_RUN_ID}"
-          BACKUP_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA')) returning id;")"
+          BACKUP_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA','supabase_cli_version','$SUPABASE_CLI_VERSION')) returning id;")"
           printf '%s' "$BACKUP_ID" > "$RUNNER_TEMP/backup-run-id.txt"
           docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='RUNNING' where id='$BACKUP_ID';"
           echo "backup_id=$BACKUP_ID" >> "$GITHUB_OUTPUT"
@@ -112,11 +124,11 @@ jobs:
           BACKUP_DIR="$RUNNER_TEMP/kdkmp-backup-${{ steps.registry.outputs.stamp }}"
           mkdir -p "$BACKUP_DIR"
 
-          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/roles.sql" --role-only
-          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/schema.sql"
-          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
-          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_schema.sql" --schema supabase_migrations
-          npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_data.sql" --use-copy --data-only --schema supabase_migrations
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/roles.sql" --role-only
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/schema.sql"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/data.sql" --use-copy --data-only -x "storage.buckets_vectors" -x "storage.vector_indexes"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_schema.sql" --schema supabase_migrations
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_data.sql" --use-copy --data-only --schema supabase_migrations
 
           docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "select jsonb_build_object('auth_users',(select count(*) from auth.users),'profiles',(select count(*) from public.profiles),'members',(select count(*) from public.members),'sales_transactions',(select count(*) from public.sales_transactions),'journal_entries',(select count(*) from public.journal_entries),'inventory_movements',(select count(*) from public.inventory_movements),'pos_receipts',(select count(*) from public.pos_receipts),'backup_runs',(select count(*) from public.system_backup_runs))::text;" > "$BACKUP_DIR/source_counts.json"
 
@@ -335,8 +347,8 @@ jobs:
           LOCAL_DIR="$RUNNER_TEMP/kdkmp-restore-target"
           mkdir -p "$LOCAL_DIR"
           cd "$LOCAL_DIR"
-          npx --yes supabase@latest init --force
-          npx --yes supabase@latest start
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init --force
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" start
           DB_CONTAINER="$(docker ps --filter 'name=supabase_db_' --format '{{.Names}}' | head -n 1)"
           if [ -z "$DB_CONTAINER" ]; then
             echo "Local Supabase database container was not found." >&2
@@ -391,7 +403,7 @@ jobs:
           DURATION="$((END_EPOCH - START_EPOCH))"
           SOURCE_JSON="$(jq -c . "$BACKUP_DIR/source_counts.json")"
           RESTORED_JSON="$(jq -c . "$BACKUP_DIR/restored_counts.json")"
-          CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" --argjson role_sanitization "$(cat "$BACKUP_DIR/restore_sanitization.json")" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase",role_sanitization:$role_sanitization}')"
+          CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" --argjson role_sanitization "$(cat "$BACKUP_DIR/restore_sanitization.json")" --arg supabase_cli_version "$SUPABASE_CLI_VERSION" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase",role_sanitization:$role_sanitization,supabase_cli_version:$supabase_cli_version}')"
 
           docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched; managed role settings were sanitized only for the local restore target.' where id='$RESTORE_ID';"
           echo "restore_id=$RESTORE_ID" >> "$GITHUB_OUTPUT"
@@ -415,11 +427,12 @@ jobs:
             --arg backup_run_number "${{ steps.registry.outputs.run_number }}" \
             --arg github_run_id "$GITHUB_RUN_ID" \
             --arg github_sha "$GITHUB_SHA" \
+            --arg supabase_cli_version "$SUPABASE_CLI_VERSION" \
             --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg source_counts "$(jq -c . "$BACKUP_DIR/source_counts.json")" \
             --arg restored_counts "$(jq -c . "$BACKUP_DIR/restored_counts.json")" \
             --arg role_sanitization "$(jq -c . "$BACKUP_DIR/restore_sanitization.json")" \
-            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson),role_sanitization:($role_sanitization|fromjson)}' \
+            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,supabase_cli_version:$supabase_cli_version,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson),role_sanitization:($role_sanitization|fromjson)}' \
             > "$BACKUP_DIR/manifest.json"
 
           TAR_PATH="$PACKAGE_DIR/kdkmp-development-$STAMP.tar.gz"
@@ -454,12 +467,103 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+      - name: Download encrypted backup artifact for read-back
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ runner.temp }}/kdkmp-readback-${{ steps.registry.outputs.stamp }}
+
+      - name: Verify downloaded artifact checksum and decryptability
+        id: readback
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAMP="${{ steps.registry.outputs.stamp }}"
+          READBACK_DIR="$RUNNER_TEMP/kdkmp-readback-$STAMP"
+          ENC_NAME="kdkmp-development-$STAMP.tar.gz.enc"
+          CHECKSUM_NAME="$ENC_NAME.sha256"
+          DECRYPTED_TAR="$RUNNER_TEMP/kdkmp-readback-$STAMP.tar.gz"
+          EXTRACT_DIR="$RUNNER_TEMP/kdkmp-readback-extracted-$STAMP"
+          EXPECTED_LIST="$RUNNER_TEMP/kdkmp-readback-expected-$STAMP.txt"
+          ACTUAL_LIST="$RUNNER_TEMP/kdkmp-readback-actual-$STAMP.txt"
+
+          cleanup_readback() {
+            rm -f "$DECRYPTED_TAR" "$EXPECTED_LIST" "$ACTUAL_LIST"
+            rm -rf "$EXTRACT_DIR"
+          }
+          trap cleanup_readback EXIT
+
+          test -f "$READBACK_DIR/$ENC_NAME"
+          test -f "$READBACK_DIR/$CHECKSUM_NAME"
+
+          FILE_COUNT="$(find "$READBACK_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "$FILE_COUNT" != "2" ]; then
+            echo "Read-back artifact must contain exactly the encrypted backup and its checksum; found $FILE_COUNT files." >&2
+            exit 1
+          fi
+
+          (
+            cd "$READBACK_DIR"
+            sha256sum -c "$CHECKSUM_NAME"
+          )
+
+          READBACK_SHA="$(sha256sum "$READBACK_DIR/$ENC_NAME" | awk '{print $1}')"
+          if [ "$READBACK_SHA" != "${{ steps.package.outputs.sha256 }}" ]; then
+            echo "Read-back encrypted artifact SHA-256 does not match the value registered before upload." >&2
+            exit 1
+          fi
+
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in "$READBACK_DIR/$ENC_NAME" \
+            -out "$DECRYPTED_TAR" \
+            -pass env:BACKUP_ENCRYPTION_PASSPHRASE
+
+          printf '%s\n' \
+            roles.sql \
+            schema.sql \
+            data.sql \
+            history_schema.sql \
+            history_data.sql \
+            source_counts.json \
+            restored_counts.json \
+            restore_sanitization.json \
+            FILES.sha256 \
+            manifest.json \
+            | sort > "$EXPECTED_LIST"
+          tar -tzf "$DECRYPTED_TAR" | sort > "$ACTUAL_LIST"
+          diff -u "$EXPECTED_LIST" "$ACTUAL_LIST"
+
+          mkdir -p "$EXTRACT_DIR"
+          tar -xzf "$DECRYPTED_TAR" -C "$EXTRACT_DIR"
+          (
+            cd "$EXTRACT_DIR"
+            sha256sum -c FILES.sha256
+            jq -e \
+              --arg backup_run_number "${{ steps.registry.outputs.run_number }}" \
+              --arg github_run_id "$GITHUB_RUN_ID" \
+              --arg github_sha "$GITHUB_SHA" \
+              --arg supabase_cli_version "$SUPABASE_CLI_VERSION" \
+              '.encrypted == true and
+               .restore_test == "PASSED" and
+               .backup_run_number == $backup_run_number and
+               .github_run_id == $github_run_id and
+               .github_sha == $github_sha and
+               .supabase_cli_version == $supabase_cli_version and
+               .source_counts == .restored_counts' \
+              manifest.json > /dev/null
+          )
+
+          VERIFIED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "verified_at=$VERIFIED_AT" >> "$GITHUB_OUTPUT"
+          echo "Encrypted artifact read-back, checksum, decryption, inner checksums, and manifest verification passed."
+
       - name: Mark backup verified
         shell: bash
         run: |
           set -euo pipefail
           BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
-          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED' where id='$BACKUP_ID';"
+          READBACK_AT="${{ steps.readback.outputs.verified_at }}"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED',manifest=manifest || jsonb_build_object('artifact_readback','PASSED','artifact_readback_verified_at','$READBACK_AT','supabase_cli_version','$SUPABASE_CLI_VERSION') where id='$BACKUP_ID';"
 
       - name: Mark registry failed when workflow fails
         if: failure()
@@ -483,5 +587,5 @@ jobs:
           LOCAL_DIR="$RUNNER_TEMP/kdkmp-restore-target"
           if [ -d "$LOCAL_DIR/supabase" ]; then
             cd "$LOCAL_DIR"
-            npx --yes supabase@latest stop --no-backup || true
+            npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup || true
           fi
