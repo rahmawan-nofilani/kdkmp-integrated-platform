@@ -1,0 +1,57 @@
+name: Scheduled DEVELOPMENT Backup Dispatch
+
+on:
+  schedule:
+    # 19:30 UTC = 02:30 WIB (Asia/Jakarta) on the next calendar day.
+    - cron: "30 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: scheduled-development-backup-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch_verified_backup:
+    name: dispatch verified backup workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch Manual Backup & Restore Drill on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          API_URL="https://api.github.com/repos/${GH_REPOSITORY}/actions/workflows/manual-backup-restore-drill.yml/dispatches"
+          RESPONSE_FILE="$RUNNER_TEMP/workflow-dispatch-response.json"
+
+          HTTP_STATUS="$(curl --silent --show-error \
+            --output "$RESPONSE_FILE" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "$API_URL" \
+            --data '{"ref":"main"}')"
+
+          if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "204" ]; then
+            echo "Backup workflow dispatch failed with HTTP status $HTTP_STATUS." >&2
+            if [ -s "$RESPONSE_FILE" ]; then
+              jq -r '.message // "GitHub API returned an unexpected response."' "$RESPONSE_FILE" >&2 || true
+            fi
+            exit 1
+          fi
+
+          if [ -s "$RESPONSE_FILE" ] && jq -e '.workflow_run_id? != null' "$RESPONSE_FILE" >/dev/null 2>&1; then
+            RUN_ID="$(jq -r '.workflow_run_id' "$RESPONSE_FILE")"
+            echo "Dispatched verified backup workflow run ID $RUN_ID on main."
+          else
+            echo "Dispatched verified backup workflow on main."
+          fi
