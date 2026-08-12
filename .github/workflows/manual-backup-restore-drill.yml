@@ -144,28 +144,43 @@ jobs:
           report_path = backup_dir / "restore_sanitization.json"
 
           source = source_path.read_text(encoding="utf-8")
-          pattern = re.compile(
+          alter_role_pattern = re.compile(
               r"^[ \t]*ALTER\s+ROLE\b(?:(?!;).)*?\bSET\b(?:(?!;).)*?;[ \t]*(?:\r?\n)?",
               re.IGNORECASE | re.MULTILINE | re.DOTALL,
           )
-          removed = pattern.findall(source)
-          portable = pattern.sub("", source)
+          session_log_pattern = re.compile(
+              r"^[ \t]*SET\s+log_min_messages\s*(?:=|TO)\s*[^;]+;[ \t]*(?:\r?\n)?",
+              re.IGNORECASE | re.MULTILINE,
+          )
+
+          removed_alter_role = alter_role_pattern.findall(source)
+          portable = alter_role_pattern.sub("", source)
+          removed_session_log = session_log_pattern.findall(portable)
+          portable = session_log_pattern.sub("", portable)
 
           if not portable.strip():
               raise SystemExit("Portable roles restore file would be empty; refusing to continue.")
-          if pattern.search(portable):
+          if alter_role_pattern.search(portable):
               raise SystemExit("Portable roles restore file still contains ALTER ROLE ... SET statements.")
+          if re.search(r"^[ \t]*SET\s+log_min_messages\b", portable, re.IGNORECASE | re.MULTILINE):
+              raise SystemExit("Portable roles restore file still contains standalone SET log_min_messages.")
 
           restore_path.write_text(portable, encoding="utf-8")
           report = {
-              "policy": "remove_alter_role_set_for_local_restore_only",
-              "removed_statement_count": len(removed),
+              "policy": "remove_managed_role_settings_for_local_restore_only",
+              "removed_alter_role_set_count": len(removed_alter_role),
+              "removed_session_log_min_messages_count": len(removed_session_log),
+              "removed_statement_count": len(removed_alter_role) + len(removed_session_log),
               "original_roles_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
               "portable_roles_sha256": hashlib.sha256(portable.encode("utf-8")).hexdigest(),
               "original_roles_preserved": True,
           }
           report_path.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
-          print(f"Prepared portable roles restore file; removed {len(removed)} environment-specific ALTER ROLE ... SET statement(s).")
+          print(
+              "Prepared portable roles restore file; removed "
+              f"{len(removed_alter_role)} ALTER ROLE ... SET statement(s) and "
+              f"{len(removed_session_log)} standalone SET log_min_messages statement(s)."
+          )
           PY
           test -s "$BACKUP_DIR/roles.restore.sql"
           test -s "$BACKUP_DIR/restore_sanitization.json"
