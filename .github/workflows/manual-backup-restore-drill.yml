@@ -23,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate required secrets
+      - name: Validate required secrets and database URL shape
         shell: bash
         run: |
           set -euo pipefail
@@ -40,6 +40,57 @@ jobs:
             exit 1
           fi
 
+          python3 - <<'PY'
+          import os
+          import sys
+          from urllib.parse import urlsplit
+
+          value = os.environ.get("SUPABASE_DB_URL", "")
+          if value != value.strip():
+              print("SUPABASE_DB_URL has leading/trailing whitespace. Recreate the GitHub secret from the Supabase copy button.", file=sys.stderr)
+              raise SystemExit(1)
+          if value[:1] in {'\"', "'", '`'} or value[-1:] in {'\"', "'", '`'}:
+              print("SUPABASE_DB_URL must not include quote/backtick characters around the URL.", file=sys.stderr)
+              raise SystemExit(1)
+
+          try:
+              parsed = urlsplit(value)
+              port = parsed.port
+          except Exception:
+              print("SUPABASE_DB_URL is not a valid PostgreSQL URL. Do not print the secret; recreate it from Supabase Session pooler.", file=sys.stderr)
+              raise SystemExit(1)
+
+          if parsed.scheme not in {"postgres", "postgresql"}:
+              print("SUPABASE_DB_URL must start with postgres:// or postgresql://.", file=sys.stderr)
+              raise SystemExit(1)
+          if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+              print("SUPABASE_DB_URL must use the Supabase Shared/Session pooler host ending in .pooler.supabase.com.", file=sys.stderr)
+              raise SystemExit(1)
+          if port != 5432:
+              print("SUPABASE_DB_URL must use Session pooler port 5432, not transaction pooler port 6543.", file=sys.stderr)
+              raise SystemExit(1)
+          if parsed.path != "/postgres":
+              print("SUPABASE_DB_URL must target database /postgres.", file=sys.stderr)
+              raise SystemExit(1)
+          if not parsed.username or not parsed.username.startswith("postgres."):
+              print("SUPABASE_DB_URL must use the Session pooler username beginning with postgres.<project-ref>.", file=sys.stderr)
+              raise SystemExit(1)
+          if not parsed.password or parsed.password == "[YOUR-PASSWORD]":
+              print("SUPABASE_DB_URL does not contain a database password. Replace [YOUR-PASSWORD] locally before saving the GitHub secret.", file=sys.stderr)
+              raise SystemExit(1)
+
+          print("SUPABASE_DB_URL shape validated: Session pooler, port 5432, database postgres. Secret value was not printed.")
+          PY
+
+      - name: Verify remote database connectivity
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm postgres:17-alpine \
+            psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
+            -c "select case when current_database()='postgres' then 'ok' else 'unexpected_database' end;" \
+            | grep -qx 'ok'
+
       - name: Create backup run registry
         id: registry
         shell: bash
@@ -47,9 +98,9 @@ jobs:
           set -euo pipefail
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           RUN_NUMBER="BKP-${STAMP}-${GITHUB_RUN_ID}"
-          BACKUP_ID="$(docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA')) returning id;")"
+          BACKUP_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA')) returning id;")"
           printf '%s' "$BACKUP_ID" > "$RUNNER_TEMP/backup-run-id.txt"
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='RUNNING' where id='$BACKUP_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='RUNNING' where id='$BACKUP_ID';"
           echo "backup_id=$BACKUP_ID" >> "$GITHUB_OUTPUT"
           echo "run_number=$RUN_NUMBER" >> "$GITHUB_OUTPUT"
           echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
@@ -67,7 +118,7 @@ jobs:
           npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_schema.sql" --schema supabase_migrations
           npx --yes supabase@latest db dump --db-url "$SUPABASE_DB_URL" -f "$BACKUP_DIR/history_data.sql" --use-copy --data-only --schema supabase_migrations
 
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "select jsonb_build_object('auth_users',(select count(*) from auth.users),'profiles',(select count(*) from public.profiles),'members',(select count(*) from public.members),'sales_transactions',(select count(*) from public.sales_transactions),'journal_entries',(select count(*) from public.journal_entries),'inventory_movements',(select count(*) from public.inventory_movements),'pos_receipts',(select count(*) from public.pos_receipts),'backup_runs',(select count(*) from public.system_backup_runs))::text;" > "$BACKUP_DIR/source_counts.json"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "select jsonb_build_object('auth_users',(select count(*) from auth.users),'profiles',(select count(*) from public.profiles),'members',(select count(*) from public.members),'sales_transactions',(select count(*) from public.sales_transactions),'journal_entries',(select count(*) from public.journal_entries),'inventory_movements',(select count(*) from public.inventory_movements),'pos_receipts',(select count(*) from public.pos_receipts),'backup_runs',(select count(*) from public.system_backup_runs))::text;" > "$BACKUP_DIR/source_counts.json"
 
           test -s "$BACKUP_DIR/roles.sql"
           test -s "$BACKUP_DIR/schema.sql"
@@ -102,9 +153,9 @@ jobs:
           DB_CONTAINER="$(cat "$RUNNER_TEMP/local-db-container.txt")"
           RESTORE_NUMBER="RST-${STAMP}-${GITHUB_RUN_ID}"
 
-          RESTORE_ID="$(docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_restore_tests(backup_run_id,restore_test_number,status,target_type,notes) values ('$BACKUP_ID','$RESTORE_NUMBER','REQUESTED','TEMPORARY_LOCAL','GitHub Actions isolated local Supabase restore drill') returning id;")"
+          RESTORE_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_restore_tests(backup_run_id,restore_test_number,status,target_type,notes) values ('$BACKUP_ID','$RESTORE_NUMBER','REQUESTED','TEMPORARY_LOCAL','GitHub Actions isolated local Supabase restore drill') returning id;")"
           printf '%s' "$RESTORE_ID" > "$RUNNER_TEMP/restore-test-id.txt"
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='RUNNING' where id='$RESTORE_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='RUNNING' where id='$RESTORE_ID';"
 
           for file in roles.sql schema.sql data.sql history_schema.sql history_data.sql; do
             docker cp "$BACKUP_DIR/$file" "$DB_CONTAINER:/tmp/$file"
@@ -139,7 +190,7 @@ jobs:
           RESTORED_JSON="$(jq -c . "$BACKUP_DIR/restored_counts.json")"
           CHECKS_JSON="$(jq -cn --arg unvalidated_fk "$UNVALIDATED_FK" '{row_counts_match:true,unvalidated_foreign_keys:($unvalidated_fk|tonumber),restore_target:"local_supabase"}')"
 
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched.' where id='$RESTORE_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_restore_tests set status='PASSED',duration_seconds=$DURATION,row_count_checks=jsonb_build_object('source','$SOURCE_JSON'::jsonb,'restored','$RESTORED_JSON'::jsonb),integrity_checks='$CHECKS_JSON'::jsonb,notes='Local Supabase restore completed and selected row counts matched.' where id='$RESTORE_ID';"
           echo "restore_id=$RESTORE_ID" >> "$GITHUB_OUTPUT"
 
       - name: Build encrypted artifact
@@ -180,7 +231,7 @@ jobs:
           OBJECT_KEY="github-artifact://actions/runs/$GITHUB_RUN_ID/$(basename "$ENC_PATH")"
           BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
           MANIFEST_JSON="$(jq -c . "$BACKUP_DIR/manifest.json")"
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='UPLOADED',object_key='$OBJECT_KEY',size_bytes=$SIZE,sha256='$SHA',manifest='$MANIFEST_JSON'::jsonb where id='$BACKUP_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='UPLOADED',object_key='$OBJECT_KEY',size_bytes=$SIZE,sha256='$SHA',manifest='$MANIFEST_JSON'::jsonb where id='$BACKUP_ID';"
 
           echo "artifact_path=$ENC_PATH" >> "$GITHUB_OUTPUT"
           echo "checksum_path=$ENC_PATH.sha256" >> "$GITHUB_OUTPUT"
@@ -204,7 +255,7 @@ jobs:
         run: |
           set -euo pipefail
           BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
-          docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED' where id='$BACKUP_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED' where id='$BACKUP_ID';"
 
       - name: Mark registry failed when workflow fails
         if: failure()
@@ -213,11 +264,11 @@ jobs:
           set +e
           if [ -n "${SUPABASE_DB_URL:-}" ] && [ -f "$RUNNER_TEMP/restore-test-id.txt" ]; then
             RESTORE_ID="$(cat "$RUNNER_TEMP/restore-test-id.txt")"
-            docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -c "update public.system_restore_tests set status='FAILED',error_summary='GitHub Actions restore drill failed; inspect workflow logs.' where id='$RESTORE_ID' and status in ('REQUESTED','RUNNING');" || true
+            docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -c "update public.system_restore_tests set status='FAILED',error_summary='GitHub Actions restore drill failed; inspect workflow logs.' where id='$RESTORE_ID' and status in ('REQUESTED','RUNNING');" || true
           fi
           if [ -n "${SUPABASE_DB_URL:-}" ] && [ -f "$RUNNER_TEMP/backup-run-id.txt" ]; then
             BACKUP_ID="$(cat "$RUNNER_TEMP/backup-run-id.txt")"
-            docker run --rm postgres:17-alpine psql "$SUPABASE_DB_URL" -X -q -c "update public.system_backup_runs set status='FAILED',error_summary='GitHub Actions backup workflow failed; inspect workflow logs.' where id='$BACKUP_ID' and status in ('REQUESTED','RUNNING','UPLOADED');" || true
+            docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -c "update public.system_backup_runs set status='FAILED',error_summary='GitHub Actions backup workflow failed; inspect workflow logs.' where id='$BACKUP_ID' and status in ('REQUESTED','RUNNING','UPLOADED');" || true
           fi
 
       - name: Stop local Supabase
