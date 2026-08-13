@@ -1,0 +1,123 @@
+name: Archive Candidate Reconstruction Rehearsal CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'config/archive/zc4d-pos-transaction-eligibility-v1.json'
+      - 'fixtures/archive/zc4d-pos-relational-synthetic.json'
+      - 'scripts/archive/zc4d-candidate-reconstruction-rehearsal.py'
+      - '.github/workflows/archive-candidate-reconstruction-rehearsal-ci.yml'
+      - 'docs/operations/zc4d-archive-candidate-reconstruction-rehearsal.md'
+  push:
+    branches:
+      - main
+    paths:
+      - 'config/archive/zc4d-pos-transaction-eligibility-v1.json'
+      - 'fixtures/archive/zc4d-pos-relational-synthetic.json'
+      - 'scripts/archive/zc4d-candidate-reconstruction-rehearsal.py'
+      - '.github/workflows/archive-candidate-reconstruction-rehearsal-ci.yml'
+      - 'docs/operations/zc4d-archive-candidate-reconstruction-rehearsal.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-candidate-reconstruction-rehearsal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rehearsal:
+    name: candidate selection + relational reconstruction
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fail closed on policy or rehearsal broadening
+        shell: bash
+        run: |
+          set -euo pipefail
+          POLICY='config/archive/zc4d-pos-transaction-eligibility-v1.json'
+          FIXTURE='fixtures/archive/zc4d-pos-relational-synthetic.json'
+          SCRIPT='scripts/archive/zc4d-candidate-reconstruction-rehearsal.py'
+
+          test -s "$POLICY"
+          test -s "$FIXTURE"
+          test -s "$SCRIPT"
+          python -m json.tool "$POLICY" >/dev/null
+          python -m json.tool "$FIXTURE" >/dev/null
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          policy=json.loads(Path('config/archive/zc4d-pos-transaction-eligibility-v1.json').read_text())
+          fixture=json.loads(Path('fixtures/archive/zc4d-pos-relational-synthetic.json').read_text())
+          assert policy['environment']=='CI_REHEARSAL_SYNTHETIC_ONLY'
+          assert policy['real_data_execution']=='BLOCKED'
+          assert policy['accounting']['required_period_status']=='HARD_CLOSED'
+          assert len(fixture['cases'])==8
+          PY
+
+          grep -q 'remote_database_touched=false' "$SCRIPT"
+          grep -q 'external_storage_touched=false' "$SCRIPT"
+          grep -q 'prune_eligible=false' "$SCRIPT"
+          grep -q 'real_data_execution=BLOCKED' "$SCRIPT"
+
+          if grep -Eiq '\b(requests|urllib|httpx|boto3|supabase|psycopg|asyncpg|socket|curl|wget|psql|rclone|wrangler|scp|rsync|ssh)\b' "$SCRIPT"; then
+            echo 'Network, database, or remote-storage capability detected in ZC-4D rehearsal script.' >&2
+            exit 1
+          fi
+
+          if grep -Eiq '\b(delete[[:space:]]+from|drop[[:space:]]+table|truncate[[:space:]]+table|shred|rmtree)\b' "$SCRIPT"; then
+            echo 'Destructive capability detected in ZC-4D rehearsal script.' >&2
+            exit 1
+          fi
+
+      - name: Compile rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/archive/zc4d-candidate-reconstruction-rehearsal.py
+
+      - name: Execute candidate and reconstruction rehearsal
+        shell: bash
+        env:
+          ARCHIVE_REHEARSAL_ID: ${{ github.run_id }}
+          ARCHIVE_REHEARSAL_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          OUTPUT="$(python scripts/archive/zc4d-candidate-reconstruction-rehearsal.py)"
+          printf '%s\n' "$OUTPUT"
+          grep -q '^candidate_sales=2$' <<<"$OUTPUT"
+          grep -q '^rejected_sales=6$' <<<"$OUTPUT"
+          grep -q '^selected_tables=9$' <<<"$OUTPUT"
+          grep -q '^deterministic_package=PASSED$' <<<"$OUTPUT"
+          grep -q '^relational_reconstruction=PASSED$' <<<"$OUTPUT"
+          grep -q '^prune_eligible=false$' <<<"$OUTPUT"
+          grep -q '^real_data_execution=BLOCKED$' <<<"$OUTPUT"
+          grep -q '^remote_database_touched=false$' <<<"$OUTPUT"
+          grep -q '^external_storage_touched=false$' <<<"$OUTPUT"
+
+      - name: Reuse verified ZC-4C encrypted package gate
+        shell: bash
+        env:
+          ARCHIVE_DRY_RUN_ID: zc4d-${{ github.run_id }}
+          ARCHIVE_DRY_RUN_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/archive/zc4c-package-dry-run.sh
+
+      - name: Confirm no persistent artifact publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'ZC-4D rehearsal passed. No archive package is uploaded or retained by this workflow.'
