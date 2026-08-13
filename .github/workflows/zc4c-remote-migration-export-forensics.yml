@@ -45,13 +45,10 @@ jobs:
             local version="$1"
             local expected_name="$2"
             local file="$OUT/${version}_${expected_name}.sql"
-            local encoded
-            local actual_name
-            local count
+            local encoded actual_name count db_length file_length db_md5 file_md5
 
             count="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='${version}' and name='${expected_name}'")"
             test "$count" = "1"
-
             actual_name="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select name from supabase_migrations.schema_migrations where version='${version}'")"
             test "$actual_name" = "$expected_name"
 
@@ -59,23 +56,10 @@ jobs:
             printf '%s' "$encoded" | tr -d '\n\r' | base64 -d > "$file"
             test -s "$file"
 
-            local db_length file_length db_md5 file_md5
             db_length="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select length(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
-            file_length="$(python3 - "$file" <<'PY'
-import sys
-p=sys.argv[1]
-s=open(p,'r',encoding='utf-8').read()
-print(len(s))
-PY
-)"
+            file_length="$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read()))' "$file")"
             db_md5="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select md5(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
-            file_md5="$(python3 - "$file" <<'PY'
-import hashlib,sys
-p=sys.argv[1]
-s=open(p,'r',encoding='utf-8').read()
-print(hashlib.md5(s.encode('utf-8')).hexdigest())
-PY
-)"
+            file_md5="$(python3 -c 'import hashlib,sys; s=open(sys.argv[1], encoding="utf-8").read(); print(hashlib.md5(s.encode("utf-8")).hexdigest())' "$file")"
             test "$file_length" = "$db_length"
             test "$file_md5" = "$db_md5"
             printf '%s\t%s\t%s\t%s\n' "$version" "$expected_name" "$db_length" "$db_md5" >> "$OUT/MANIFEST.tsv"
