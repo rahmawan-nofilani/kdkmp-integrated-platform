@@ -1,0 +1,98 @@
+name: ZC-4C Remote Migration Export Forensics
+
+on:
+  push:
+    branches:
+      - agent/zc4c-development-apply-control
+    paths:
+      - '.github/workflows/zc4c-remote-migration-export-forensics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    name: export known DEVELOPMENT migration statements read-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate protected connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_DB_URL"
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'SUPABASE_DB_URL has an unexpected scheme.' >&2; exit 1 ;;
+          esac
+
+      - name: Export exact known migration SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/remote-migration-export"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          export_one() {
+            local version="$1"
+            local expected_name="$2"
+            local file="$OUT/${version}_${expected_name}.sql"
+            local encoded
+            local actual_name
+            local count
+
+            count="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='${version}' and name='${expected_name}'")"
+            test "$count" = "1"
+
+            actual_name="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select name from supabase_migrations.schema_migrations where version='${version}'")"
+            test "$actual_name" = "$expected_name"
+
+            encoded="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select encode(convert_to(statements[1],'UTF8'),'base64') from supabase_migrations.schema_migrations where version='${version}'")"
+            printf '%s' "$encoded" | tr -d '\n\r' | base64 -d > "$file"
+            test -s "$file"
+
+            local db_length file_length db_md5 file_md5
+            db_length="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select length(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
+            file_length="$(python3 - "$file" <<'PY'
+import sys
+p=sys.argv[1]
+s=open(p,'r',encoding='utf-8').read()
+print(len(s))
+PY
+)"
+            db_md5="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select md5(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
+            file_md5="$(python3 - "$file" <<'PY'
+import hashlib,sys
+p=sys.argv[1]
+s=open(p,'r',encoding='utf-8').read()
+print(hashlib.md5(s.encode('utf-8')).hexdigest())
+PY
+)"
+            test "$file_length" = "$db_length"
+            test "$file_md5" = "$db_md5"
+            printf '%s\t%s\t%s\t%s\n' "$version" "$expected_name" "$db_length" "$db_md5" >> "$OUT/MANIFEST.tsv"
+          }
+
+          export_one 20260811061142 phase_1_baseline_roles_permissions
+          export_one 20260811150155 pos_cart_convenience_commands
+          export_one 20260811150300 pos_cart_idempotency_and_empty_cancel_fix
+          export_one 20260811150441 pos_controlled_draft_cancel
+
+          echo 'Exact DEVELOPMENT migration export completed read-only.'
+          cat "$OUT/MANIFEST.tsv"
+
+      - name: Upload short-lived forensic export
+        uses: actions/upload-artifact@v4
+        with:
+          name: zc4c-remote-migration-export-${{ github.run_id }}
+          path: ${{ runner.temp }}/remote-migration-export
+          if-no-files-found: error
+          retention-days: 1
