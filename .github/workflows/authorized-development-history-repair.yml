@@ -1,0 +1,249 @@
+name: Database Migration CI - Authorized History Repair
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/authorized-development-history-repair.yml'
+      - '.ops/authorizations/20260811130715-development-history-repair.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/authorized-development-history-repair.yml'
+      - '.ops/authorizations/20260811130715-development-history-repair.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authorized-history-repair-20260811130715-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: '2.113.0'
+  TARGET_VERSION: '20260811130715'
+  TARGET_NAME: logistics_distribution_foundation
+  TARGET_FILE: database/migrations/20260811130715_logistics_distribution_foundation.sql
+  AUTHORIZATION_FILE: .ops/authorizations/20260811130715-development-history-repair.txt
+  HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
+  HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
+
+jobs:
+  safety_gate:
+    name: clean replay before authorized history repair
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate exact authorization contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$AUTHORIZATION_FILE"
+          test -s "$TARGET_FILE"
+          grep -Fxq 'AUTHORIZED_BY_USER=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'SCOPE=DEVELOPMENT' "$AUTHORIZATION_FILE"
+          grep -Fxq 'MIGRATION_VERSION=20260811130715' "$AUTHORIZATION_FILE"
+          grep -Fxq 'MIGRATION_NAME=logistics_distribution_foundation' "$AUTHORIZATION_FILE"
+          grep -Fxq 'ACTION=HISTORY_ONLY_REPAIR_STATUS_APPLIED' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_DB_PUSH=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_SCHEMA_DDL=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_BUSINESS_DATA_MUTATION=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_DELETE_PRUNE_PURGE=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_R2_OR_PAID_STORAGE=true' "$AUTHORIZATION_FILE"
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL" = "$SUPABASE_CLI_VERSION"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration repair --help >/dev/null
+          echo "Using pinned Supabase CLI $ACTUAL"
+
+      - name: Clean replay repository migrations in disposable Supabase
+        id: replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$HISTORICAL_DEMO_BOOTSTRAP"
+          grep -q '^-- DEVELOPMENT / DEMO DATA ONLY$' "$HISTORICAL_DEMO_BOOTSTRAP"
+
+          WORKDIR="$RUNNER_TEMP/history-repair-safety-replay"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
+
+          INVALID_NAMES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | grep -Ev '^[0-9]{14}_[a-z0-9_]+\.sql$' || true)"
+          test -z "$INVALID_NAMES"
+
+          DUPLICATE_VERSIONS="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | cut -c1-14 | sort | uniq -d)"
+          test -z "$DUPLICATE_VERSIONS"
+
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+          echo 'Disposable clean replay PASSED. No remote database was contacted.'
+
+      - name: Stop disposable Supabase
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          WORKDIR="${{ steps.replay.outputs.workdir }}"
+          if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+            cd "$WORKDIR"
+            npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup
+          fi
+
+  execute_authorized_repair:
+    name: execute one authorized DEVELOPMENT history-only repair
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - name: Checkout exact merged main
+        uses: actions/checkout@v4
+
+      - name: Fail closed on authorization, branch and secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test -n "$SUPABASE_DB_URL"
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'SUPABASE_DB_URL has an unexpected scheme.' >&2; exit 1 ;;
+          esac
+
+          test -s "$AUTHORIZATION_FILE"
+          test -s "$TARGET_FILE"
+          grep -Fxq 'AUTHORIZED_BY_USER=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'SCOPE=DEVELOPMENT' "$AUTHORIZATION_FILE"
+          grep -Fxq 'MIGRATION_VERSION=20260811130715' "$AUTHORIZATION_FILE"
+          grep -Fxq 'MIGRATION_NAME=logistics_distribution_foundation' "$AUTHORIZATION_FILE"
+          grep -Fxq 'ACTION=HISTORY_ONLY_REPAIR_STATUS_APPLIED' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_DB_PUSH=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_SCHEMA_DDL=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_BUSINESS_DATA_MUTATION=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_DELETE_PRUNE_PURGE=true' "$AUTHORIZATION_FILE"
+          grep -Fxq 'NO_R2_OR_PAID_STORAGE=true' "$AUTHORIZATION_FILE"
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL" = "$SUPABASE_CLI_VERSION"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration repair --help >/dev/null
+          echo "Using pinned Supabase CLI $ACTUAL"
+
+      - name: Preflight migration boundary and capture DEVELOPMENT fingerprint
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find database/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | cut -c1-14 | sort -u > "$RUNNER_TEMP/local-versions.txt"
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select version from supabase_migrations.schema_migrations order by version" | sed '/^[[:space:]]*$/d' | sort -u > "$RUNNER_TEMP/remote-versions.txt"
+          comm -23 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" > "$RUNNER_TEMP/local-only-before.txt"
+          comm -13 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" > "$RUNNER_TEMP/remote-only-before.txt"
+
+          printf '%s\n' 20260811130715 20260813100013 20260813104050 > "$RUNNER_TEMP/expected-local-only-before.txt"
+          diff -u "$RUNNER_TEMP/expected-local-only-before.txt" "$RUNNER_TEMP/local-only-before.txt"
+          test ! -s "$RUNNER_TEMP/remote-only-before.txt"
+
+          TARGET_COUNT="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='$TARGET_VERSION'" | tr -d '[:space:]')"
+          test "$TARGET_COUNT" = '0'
+
+          ANON_SELECT_COUNT="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from information_schema.role_table_grants where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') and grantee='anon' and privilege_type='SELECT'" | tr -d '[:space:]')"
+          test "$ANON_SELECT_COUNT" = '10'
+
+          snapshot() {
+            local out="$1"
+            {
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,ordinal_position,column_name,data_type,coalesce(udt_schema,''),udt_name,is_nullable,coalesce(column_default,'') from information_schema.columns where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by table_name,ordinal_position"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select c.relname,con.conname,con.contype,md5(pg_get_constraintdef(con.oid,true)) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by c.relname,con.conname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,indexname,md5(indexdef) from pg_indexes where schemaname='public' and tablename in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by tablename,indexname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,policyname,cmd,coalesce(array_to_string(roles,','),''),md5(coalesce(qual,'')),md5(coalesce(with_check,'')) from pg_policies where schemaname='public' and tablename in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by tablename,policyname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,grantee,privilege_type from information_schema.role_table_grants where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') and grantee in ('anon','authenticated') order by table_name,grantee,privilege_type"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select 'fleet_maintenance_records',count(*) from public.fleet_maintenance_records union all select 'fleet_odometer_entries',count(*) from public.fleet_odometer_entries union all select 'fleet_vehicles',count(*) from public.fleet_vehicles union all select 'logistics_delivery_events',count(*) from public.logistics_delivery_events union all select 'logistics_delivery_exceptions',count(*) from public.logistics_delivery_exceptions union all select 'logistics_pod_evidence',count(*) from public.logistics_pod_evidence union all select 'logistics_route_trip_stops',count(*) from public.logistics_route_trip_stops union all select 'logistics_route_trips',count(*) from public.logistics_route_trips union all select 'logistics_shipments',count(*) from public.logistics_shipments union all select 'logistics_status_transition_rules',count(*) from public.logistics_status_transition_rules order by 1"
+            } > "$out"
+          }
+
+          snapshot "$RUNNER_TEMP/development-before.tsv"
+          sha256sum "$RUNNER_TEMP/development-before.tsv" | awk '{print $1}' > "$RUNNER_TEMP/development-before.sha256"
+          echo "Preflight PASSED: no remote-only versions; exact three local-only versions; target history absent; anon SELECT drift still exactly 10."
+
+      - name: Execute authorized history-only repair with Supabase CLI 2.113.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$RUNNER_TEMP/authorized-history-repair"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+
+          test -s "supabase/migrations/${TARGET_VERSION}_${TARGET_NAME}.sql"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration repair "$TARGET_VERSION" --status applied --db-url "$SUPABASE_DB_URL"
+          echo "Authorized history-only repair command completed for $TARGET_VERSION."
+
+      - name: Postflight verify history and prove logistics fingerprint unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET_ROW="$(psql "$SUPABASE_DB_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "select version,coalesce(name,''),coalesce(cardinality(statements),0) from supabase_migrations.schema_migrations where version='$TARGET_VERSION'")"
+          VERSION="$(printf '%s' "$TARGET_ROW" | cut -d'|' -f1)"
+          NAME="$(printf '%s' "$TARGET_ROW" | cut -d'|' -f2)"
+          STATEMENT_COUNT="$(printf '%s' "$TARGET_ROW" | cut -d'|' -f3)"
+          test "$VERSION" = "$TARGET_VERSION"
+          test "$NAME" = "$TARGET_NAME"
+          test "$STATEMENT_COUNT" -gt 0
+
+          find database/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | cut -c1-14 | sort -u > "$RUNNER_TEMP/local-versions-after.txt"
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select version from supabase_migrations.schema_migrations order by version" | sed '/^[[:space:]]*$/d' | sort -u > "$RUNNER_TEMP/remote-versions-after.txt"
+          comm -23 "$RUNNER_TEMP/local-versions-after.txt" "$RUNNER_TEMP/remote-versions-after.txt" > "$RUNNER_TEMP/local-only-after.txt"
+          comm -13 "$RUNNER_TEMP/local-versions-after.txt" "$RUNNER_TEMP/remote-versions-after.txt" > "$RUNNER_TEMP/remote-only-after.txt"
+          printf '%s\n' 20260813100013 20260813104050 > "$RUNNER_TEMP/expected-local-only-after.txt"
+          diff -u "$RUNNER_TEMP/expected-local-only-after.txt" "$RUNNER_TEMP/local-only-after.txt"
+          test ! -s "$RUNNER_TEMP/remote-only-after.txt"
+
+          ANON_SELECT_COUNT="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from information_schema.role_table_grants where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') and grantee='anon' and privilege_type='SELECT'" | tr -d '[:space:]')"
+          test "$ANON_SELECT_COUNT" = '10'
+
+          snapshot() {
+            local out="$1"
+            {
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,ordinal_position,column_name,data_type,coalesce(udt_schema,''),udt_name,is_nullable,coalesce(column_default,'') from information_schema.columns where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by table_name,ordinal_position"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select c.relname,con.conname,con.contype,md5(pg_get_constraintdef(con.oid,true)) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by c.relname,con.conname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,indexname,md5(indexdef) from pg_indexes where schemaname='public' and tablename in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by tablename,indexname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,policyname,cmd,coalesce(array_to_string(roles,','),''),md5(coalesce(qual,'')),md5(coalesce(with_check,'')) from pg_policies where schemaname='public' and tablename in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') order by tablename,policyname"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,grantee,privilege_type from information_schema.role_table_grants where table_schema='public' and table_name in ('fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules') and grantee in ('anon','authenticated') order by table_name,grantee,privilege_type"
+              psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select 'fleet_maintenance_records',count(*) from public.fleet_maintenance_records union all select 'fleet_odometer_entries',count(*) from public.fleet_odometer_entries union all select 'fleet_vehicles',count(*) from public.fleet_vehicles union all select 'logistics_delivery_events',count(*) from public.logistics_delivery_events union all select 'logistics_delivery_exceptions',count(*) from public.logistics_delivery_exceptions union all select 'logistics_pod_evidence',count(*) from public.logistics_pod_evidence union all select 'logistics_route_trip_stops',count(*) from public.logistics_route_trip_stops union all select 'logistics_route_trips',count(*) from public.logistics_route_trips union all select 'logistics_shipments',count(*) from public.logistics_shipments union all select 'logistics_status_transition_rules',count(*) from public.logistics_status_transition_rules order by 1"
+            } > "$out"
+          }
+
+          snapshot "$RUNNER_TEMP/development-after.tsv"
+          cmp -s "$RUNNER_TEMP/development-before.tsv" "$RUNNER_TEMP/development-after.tsv"
+          BEFORE_SHA="$(cat "$RUNNER_TEMP/development-before.sha256")"
+          AFTER_SHA="$(sha256sum "$RUNNER_TEMP/development-after.tsv" | awk '{print $1}')"
+          test "$BEFORE_SHA" = "$AFTER_SHA"
+
+          echo "History-only repair VERIFIED: version=$TARGET_VERSION name=$TARGET_NAME statements=$STATEMENT_COUNT"
+          echo "Logistics schema/grants/row-count fingerprint unchanged: $AFTER_SHA"
+          echo 'Pending migrations are now exactly: 20260813100013, 20260813104050.'
+          echo 'No db push, schema DDL, business-data mutation, delete/prune/purge, R2, or paid storage action occurred.'
