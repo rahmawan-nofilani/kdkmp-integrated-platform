@@ -1,0 +1,118 @@
+name: ZC-4C Repository History Sync
+
+on:
+  push:
+    branches:
+      - agent/zc4c-development-apply-control
+    paths:
+      - '.github/workflows/zc4c-repository-history-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: write exact DEVELOPMENT history to alignment branch only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      TARGET_BRANCH: agent/migration-history-repository-alignment
+      EXPECTED_BASE: abf8b48ad2c899f911fdb9379fb59dcd01c78fbb
+
+    steps:
+      - name: Checkout alignment branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fail closed on branch/base mismatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TARGET_BRANCH" != "main"
+          test "$(git branch --show-current)" = "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+          test -n "$SUPABASE_DB_URL"
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'SUPABASE_DB_URL has an unexpected scheme.' >&2; exit 1 ;;
+          esac
+
+      - name: Export exact migration statements into repository history
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR=database/migrations
+
+          export_one() {
+            local version="$1"
+            local expected_name="$2"
+            local expected_length="$3"
+            local expected_md5="$4"
+            local file="$DIR/${version}_${expected_name}.sql"
+            local encoded actual_name db_length db_md5 file_length file_md5
+
+            test ! -e "$file"
+            actual_name="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select name from supabase_migrations.schema_migrations where version='${version}'")"
+            db_length="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select length(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
+            db_md5="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select md5(statements[1]) from supabase_migrations.schema_migrations where version='${version}'")"
+            test "$actual_name" = "$expected_name"
+            test "$db_length" = "$expected_length"
+            test "$db_md5" = "$expected_md5"
+
+            encoded="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select encode(convert_to(statements[1],'UTF8'),'base64') from supabase_migrations.schema_migrations where version='${version}'")"
+            printf '%s' "$encoded" | tr -d '\n\r' | base64 -d > "$file"
+            test -s "$file"
+
+            file_length="$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read()))' "$file")"
+            file_md5="$(python3 -c 'import hashlib,sys; s=open(sys.argv[1], encoding="utf-8").read(); print(hashlib.md5(s.encode("utf-8")).hexdigest())' "$file")"
+            test "$file_length" = "$expected_length"
+            test "$file_md5" = "$expected_md5"
+          }
+
+          for old in \
+            "$DIR/20260811061400_phase_1_baseline_roles_permissions.sql" \
+            "$DIR/20260811150640_pos_cart_convenience_commands.sql" \
+            "$DIR/20260811152316_pos_controlled_draft_cancel.sql"; do
+            test -s "$old"
+          done
+
+          export_one 20260811061142 phase_1_baseline_roles_permissions 8040 2825f6ba2adfb7bd6c1a63386570819e
+          export_one 20260811150155 pos_cart_convenience_commands 4883 333398a6ba28f20b871de3e5519c81b7
+          export_one 20260811150300 pos_cart_idempotency_and_empty_cancel_fix 4703 83c502abbb6b2534f39d9b51f7f55b7f
+          export_one 20260811150441 pos_controlled_draft_cancel 10568 d7efe2fb3d4d11ad0d34db27e28f9c3d
+
+          rm \
+            "$DIR/20260811061400_phase_1_baseline_roles_permissions.sql" \
+            "$DIR/20260811150640_pos_cart_convenience_commands.sql" \
+            "$DIR/20260811152316_pos_controlled_draft_cancel.sql"
+
+          git diff --check
+          mapfile -t CHANGED < <(git status --short --untracked-files=all | awk '{print $2}' | sort)
+          test "${#CHANGED[@]}" -eq 7
+          printf '%s\n' "${CHANGED[@]}"
+
+          EXPECTED="$(printf '%s\n' \
+            "$DIR/20260811061142_phase_1_baseline_roles_permissions.sql" \
+            "$DIR/20260811061400_phase_1_baseline_roles_permissions.sql" \
+            "$DIR/20260811150155_pos_cart_convenience_commands.sql" \
+            "$DIR/20260811150300_pos_cart_idempotency_and_empty_cancel_fix.sql" \
+            "$DIR/20260811150441_pos_controlled_draft_cancel.sql" \
+            "$DIR/20260811150640_pos_cart_convenience_commands.sql" \
+            "$DIR/20260811152316_pos_controlled_draft_cancel.sql" | sort)"
+          ACTUAL="$(printf '%s\n' "${CHANGED[@]}" | sort)"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Commit and push alignment branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "$TARGET_BRANCH"
+          test "$TARGET_BRANCH" != "main"
+          git config user.name 'kdkmp-migration-history-bot'
+          git config user.email 'kdkmp-migration-history-bot@users.noreply.github.com'
+          git add database/migrations
+          git commit -m 'db: restore repository migration history from DEVELOPMENT'
+          git push origin "HEAD:$TARGET_BRANCH"
