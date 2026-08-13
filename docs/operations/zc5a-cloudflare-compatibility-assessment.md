@@ -1,6 +1,6 @@
 # ZC-5A — Cloudflare Workers compatibility assessment
 
-Status: NODE MIDDLEWARE BLOCKER PROVEN / EDGE BRIDGE PROBE IN PROGRESS / NO CLOUDFLARE ACCOUNT ACTIVATION
+Status: BUILD COMPATIBILITY PROVEN VIA RUNNER-ONLY EDGE BRIDGE / LOCAL RUNTIME STILL REQUIRED / NO CLOUDFLARE ACCOUNT ACTIVATION
 
 ## Purpose
 
@@ -28,9 +28,9 @@ The current OpenNext Cloudflare documentation states that all minor and patch re
 
 Next.js 16 changed `proxy.ts` to the Node.js runtime and does not allow `proxy.ts` to configure a different runtime. Next.js 16 still permits the deprecated `middleware.ts` convention when an Edge-runtime interception layer is required.
 
-Supabase's current Next.js SSR guidance still requires a request interception layer to refresh expired Auth tokens and write refreshed cookies. It recommends `supabase.auth.getClaims()` and warns against treating the cookie session alone as authorization. KDKMP already follows this model and also enforces authorization in protected server code, so ZC-5A will not remove session refresh to make Cloudflare compile.
+Supabase's current Next.js SSR guidance still requires a request interception layer to refresh expired Auth tokens and write refreshed cookies. It recommends `supabase.auth.getClaims()` and warns against treating the cookie session alone as authorization. KDKMP already follows this model and also enforces authorization in protected server code, so ZC-5A does not remove session refresh to make Cloudflare compile.
 
-## Proven baseline result
+## Baseline failure — blocker proven
 
 Cloudflare OpenNext Build Proof run #1 used the actual repository, Next.js `16.3.0`, `@opennextjs/cloudflare@1.20.2`, and Wrangler `4.94.0`.
 
@@ -38,28 +38,39 @@ The ordinary Next.js production build completed successfully, including TypeScri
 
 `Node.js middleware is not currently supported. Consider switching to Edge Middleware.`
 
-Therefore:
+Therefore the demonstrated blocker is the Node-runtime request interception produced by `src/proxy.ts`, not Next.js `16.3.0` or the application build itself.
 
-- Next.js `16.3.0` itself is not the demonstrated blocker;
-- application compilation is not the demonstrated blocker;
-- the demonstrated blocker is the Node-runtime request interception produced by `src/proxy.ts`;
-- Wrangler dry-run did not run after the failed build;
-- no Cloudflare account, deployment, or storage was touched.
+## Runner-only Edge compatibility bridge — PASS
 
-## Runner-only Edge compatibility bridge
+A later proof kept the tracked authentication source unchanged and performed this transformation only inside the disposable GitHub runner:
 
-The next ZC-5A proof does not modify the tracked authentication source.
-
-Inside the disposable GitHub runner only, CI will:
-
-1. save the tracked `src/proxy.ts`;
-2. create `src/middleware.ts` with the identical body/matcher and rename only the exported request function from `proxy` to `middleware`;
-3. remove `src/proxy.ts` only from the disposable workspace;
+1. save tracked `src/proxy.ts`;
+2. create temporary `src/middleware.ts` with the identical body/matcher and rename only the exported request function from `proxy` to `middleware`;
+3. remove `src/proxy.ts` only inside the disposable workspace;
 4. run the OpenNext build;
-5. restore the original tracked `src/proxy.ts` and remove the temporary middleware file;
-6. prove `git status` is clean for tracked `src` before the job finishes.
+5. restore original tracked `src/proxy.ts` and remove the temporary middleware file;
+6. prove tracked `src` is clean again.
 
-This tests the smallest officially documented compatibility bridge without yet changing the working Vercel application.
+This proof passed.
+
+Verified results:
+
+- Next.js `16.3.0` production build: PASS;
+- OpenNext Cloudflare transformation: PASS;
+- `.open-next/worker.js`: generated;
+- tracked Next.js source restored cleanly: PASS;
+- Wrangler `deploy --dry-run`: PASS;
+- Worker upload before compression: `6812.16 KiB`;
+- Worker gzip size: `1387.49 KiB`;
+- current Workers Free compressed limit: `3 MB`;
+- static assets detected: `18`;
+- persistent Cloudflare bindings: none; only the generated static `ASSETS` binding;
+- Cloudflare account touched: false;
+- Cloudflare storage touched: false;
+- deployment attempted: false;
+- secrets consumed: false.
+
+The gzip bundle is therefore well below the current Workers Free size ceiling. This is build compatibility evidence only; it is not proof of login/session behavior on Workers.
 
 ## Pinned build-proof toolchain
 
@@ -70,52 +81,31 @@ ZC-5A CI installs the following only inside the disposable GitHub runner:
 
 These packages are not added to `package.json` or `package-lock.json` in this phase.
 
-The proof creates temporary `open-next.config.ts` and `wrangler.jsonc` files in the runner. The Wrangler config has only:
-
-- `.open-next/worker.js` entry point;
-- `.open-next/assets` static assets;
-- `nodejs_compat`;
-- a fixed compatibility date.
-
-It contains no R2, D1, KV, Durable Object or other persistent binding.
+The temporary Wrangler config contains only the Worker entry point, static assets, `nodejs_compat`, and a fixed compatibility date. It contains no R2, D1, KV, Durable Object or other persistent binding.
 
 ## Compatibility matrix
 
-| Area | ZC-5A status | Gate |
+| Area | ZC-5A status | Remaining gate |
 |---|---|---|
-| Next.js 16.3.0 baseline | PARTIAL PASS | native `next build` passed inside OpenNext run #1 |
-| App Router / RSC / SSR | BUILD-COMPATIBLE SO FAR | OpenNext transformation still depends on middleware bridge |
-| Route handlers | BUILD-COMPATIBLE SO FAR | later `/api/health` runtime test required |
-| Server Actions | BUILD-COMPATIBLE SO FAR | authenticated action runtime test required later |
-| Supabase SSR server client | COMPATIBILITY RISK | login/session refresh must be proven later |
-| `src/proxy.ts` session refresh | BLOCKED AS NODE MIDDLEWARE | run #1 produced explicit OpenNext failure |
-| runner-only Edge middleware bridge | PROBE | OpenNext build + later runtime auth test |
-| Explicit Edge runtime in app routes | CLEAR | static scan returns none |
-| Vercel-specific runtime packages | CLEAR | static scan returns none |
-| Worker compressed size | PROBE | Wrangler dry-run must stay below Workers Free 3 MiB compressed limit |
-| R2 cache | DISABLED | not authorized; no R2 binding in ZC-5A |
-| Cloudflare account/deployment | DISABLED | separate explicit owner checkpoint |
-| Custom domain | DISABLED | not needed for build proof |
-
-## CI proof sequence
-
-1. install application dependencies from the lockfile;
-2. run repository static compatibility checks;
-3. install pinned OpenNext + Wrangler in `node_modules` only;
-4. prove `package.json` and `package-lock.json` remain byte-identical;
-5. create temporary zero-binding Cloudflare/OpenNext config;
-6. create the runner-only Edge middleware bridge;
-7. run `opennextjs-cloudflare build`;
-8. restore tracked Next.js source and prove it is unchanged;
-9. if build succeeds, run Wrangler with `deploy --dry-run` only;
-10. inspect compressed-size output and keep it below the current Workers Free 3 MiB compressed limit;
-11. prove tracked app/package files remain unchanged.
-
-A build failure is a valid ZC-5A result and must be investigated rather than bypassed.
+| Next.js 16.3.0 | BUILD PASS | local Workers runtime |
+| App Router / RSC / SSR | BUILD PASS | local Workers runtime |
+| Route handlers | BUILD PASS | `/api/health` local runtime test |
+| Server Actions | BUILD PASS | authenticated local runtime test |
+| Supabase SSR server client | BUILD PASS ONLY | login/session refresh runtime test |
+| tracked `src/proxy.ts` | NODE MIDDLEWARE BLOCKER | cannot be used directly by current OpenNext |
+| Edge middleware bridge | BUILD PASS | runtime auth/cookie behavior must be proven |
+| Explicit Edge runtime in app routes | CLEAR | continue static scan |
+| Vercel-specific runtime packages | CLEAR | continue static scan |
+| Worker compressed size | PASS | `1387.49 KiB` < current Free limit |
+| R2 cache | DISABLED | remains unauthorized |
+| Cloudflare account/deployment | DISABLED | separate owner checkpoint |
+| Custom domain | DISABLED | not needed yet |
 
 ## Security/dependency observation
 
-The baseline application `npm ci` reported zero vulnerabilities in the application dependency graph. The ephemeral OpenNext/Wrangler probe installation reported additional audit findings in its disposable dependency tree. Those probe packages are therefore not promoted to permanent application dependencies in ZC-5A. A separate dependency review is required before any adapter/tooling is committed for a deployable pilot.
+The baseline application `npm ci` reported zero vulnerabilities in the application dependency graph. The ephemeral OpenNext/Wrangler probe installation reported six audit findings in its disposable dependency tree (`1 low`, `5 high`) plus deprecation warnings from transitive packages.
+
+The probe packages are therefore not promoted to permanent application dependencies in ZC-5A. A focused dependency review is required before any adapter/tooling is committed for a deployable pilot.
 
 ## Explicit non-scope
 
@@ -144,7 +134,6 @@ ZC-5A does not:
 
 ## Decision after ZC-5A
 
-- If the runner-only Edge bridge build fails: investigate only the next demonstrated incompatibility.
-- If the runner-only Edge bridge build passes: do not automatically change auth source. First prove Wrangler size and local Worker runtime behavior, then propose a reviewed compatibility change that preserves Vercel and Supabase semantics.
+Build compatibility is now proven with the runner-only Edge middleware bridge. The next safe phase is a local Workers runtime rehearsal that keeps all Cloudflare remote/account actions disabled and proves `/api/health`, public rendering, middleware execution, and Supabase cookie/session semantics before any tracked auth-source change or remote pilot.
 
-R2 remains disabled regardless of build outcome.
+R2 remains disabled regardless of runtime-test outcome.
