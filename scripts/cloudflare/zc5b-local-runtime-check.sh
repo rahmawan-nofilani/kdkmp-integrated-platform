@@ -57,18 +57,35 @@ then
   exit 1
 fi
 
-ROOT_CODE="$(curl --silent --show-error --output /tmp/zc5b-root.html --write-out '%{http_code}' --max-time 5 "${BASE_URL}/" 2>/tmp/zc5b-root-curl.err || true)"
-if [ "$ROOT_CODE" != '200' ]; then
-  echo "Public root route failed; status=${ROOT_CODE:-none}." >&2
+ROOT_CODE="$(curl --silent --show-error --output /tmp/zc5b-root.html --dump-header /tmp/zc5b-root.headers --write-out '%{http_code}' --max-time 5 "${BASE_URL}/" 2>/tmp/zc5b-root-curl.err || true)"
+if [ "$ROOT_CODE" != '307' ]; then
+  echo "Root route contract failed; expected 307 to /dashboard, got status=${ROOT_CODE:-none}." >&2
   cat /tmp/zc5b-root-curl.err >&2 || true
-  head -c 2000 /tmp/zc5b-root.html >&2 || true
+  cat /tmp/zc5b-root.headers >&2 || true
+  show_diagnostics
+  exit 1
+fi
+if ! grep -Eiq '^location:[[:space:]]*/dashboard[[:space:]]*$' /tmp/zc5b-root.headers; then
+  echo 'Root redirect target is not /dashboard.' >&2
+  cat /tmp/zc5b-root.headers >&2 || true
+  show_diagnostics
+  exit 1
+fi
+
+LOGIN_CODE="$(curl --silent --show-error --output /tmp/zc5b-login.html --write-out '%{http_code}' --max-time 5 "${BASE_URL}/login" 2>/tmp/zc5b-login-curl.err || true)"
+if [ "$LOGIN_CODE" != '200' ]; then
+  echo "Public login route failed; status=${LOGIN_CODE:-none}." >&2
+  cat /tmp/zc5b-login-curl.err >&2 || true
+  head -c 2000 /tmp/zc5b-login.html >&2 || true
   echo >&2
   show_diagnostics
   exit 1
 fi
 
 echo 'health_status=200'
-echo "root_status=$ROOT_CODE"
+echo 'root_status=307'
+echo 'root_redirect=/dashboard'
+echo 'login_status=200'
 echo 'workerd_local_runtime=PASSED'
 echo 'cloudflare_remote_touched=false'
 echo 'deployment_attempted=false'
