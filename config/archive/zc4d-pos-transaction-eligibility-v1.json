@@ -1,0 +1,40 @@
+{
+  "policy_version": "zc4d-pos-transaction-eligibility-v1",
+  "environment": "CI_REHEARSAL_SYNTHETIC_ONLY",
+  "archive_class": "POS_TRANSACTION",
+  "archive_unit": "tenant_or_cooperative + archive_class + hard_closed_source_period",
+  "source_period": {
+    "from": "2026-07-01T00:00:00+07:00",
+    "to_exclusive": "2026-08-01T00:00:00+07:00",
+    "timezone": "Asia/Jakarta"
+  },
+  "sale": {
+    "required_status": "COMPLETED",
+    "required_sync_status": "SYNCED",
+    "require_completed_at": true,
+    "forbid_reversal": true
+  },
+  "payment": {
+    "intent_required_status": "SETTLED",
+    "attempt_required_status": "SETTLED",
+    "require_exact_amount_reconciliation": true
+  },
+  "inventory": {
+    "required_status": "POSTED",
+    "require_posted_at": true,
+    "forbid_reversal": true
+  },
+  "accounting": {
+    "required_period_status": "HARD_CLOSED",
+    "journal_required_status": "POSTED",
+    "require_posted_at": true,
+    "require_balanced_journal": true,
+    "forbid_reversal": true
+  },
+  "real_data_execution": "BLOCKED",
+  "real_execution_blockers": [
+    "LEGAL_AUDIT_DISPUTE_HOLD_GATE_NOT_ACTIVATED",
+    "DURABLE_ARCHIVE_DESTINATION_NOT_ACTIVATED",
+    "OWNER_PRUNE_AUTHORIZATION_NOT_GRANTED"
+  ]
+}
