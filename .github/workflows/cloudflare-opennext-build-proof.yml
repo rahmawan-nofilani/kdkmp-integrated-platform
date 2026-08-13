@@ -93,6 +93,27 @@ jobs:
             exit 1
           fi
 
+      - name: Create disposable Edge middleware compatibility bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s src/proxy.ts
+          test ! -e src/middleware.ts
+          cp src/proxy.ts /tmp/zc5a-proxy.ts.original
+          python - <<'PY'
+          from pathlib import Path
+
+          src = Path('src/proxy.ts').read_text()
+          needle = 'export async function proxy(request: NextRequest)'
+          replacement = 'export async function middleware(request: NextRequest)'
+          if src.count(needle) != 1:
+              raise SystemExit('Expected exactly one Next.js 16 proxy export.')
+          Path('src/middleware.ts').write_text(src.replace(needle, replacement))
+          PY
+          rm src/proxy.ts
+          grep -q 'export async function middleware' src/middleware.ts
+          echo 'edge_middleware_bridge=RUNNER_ONLY'
+
       - name: Build with OpenNext
         shell: bash
         run: |
@@ -100,6 +121,20 @@ jobs:
           npx --no-install opennextjs-cloudflare build 2>&1 | tee /tmp/zc5a-opennext-build.log
           test -s .open-next/worker.js
           test -d .open-next/assets
+          if grep -Fq 'Node.js middleware is not currently supported' /tmp/zc5a-opennext-build.log; then
+            echo 'OpenNext still detected Node Middleware after the Edge bridge.' >&2
+            exit 1
+          fi
+
+      - name: Restore tracked Next.js source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f src/middleware.ts
+          cp /tmp/zc5a-proxy.ts.original src/proxy.ts
+          test -z "$(git status --porcelain -- src)"
+          echo 'tracked_source_restored=true'
 
       - name: Wrangler bundle dry-run only
         shell: bash
@@ -125,6 +160,7 @@ jobs:
           PY
 
       - name: Confirm repository and remote safety boundaries
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -135,4 +171,4 @@ jobs:
           echo 'cloudflare_storage_touched=false'
           echo 'deployment_attempted=false'
           echo 'secrets_consumed=false'
-          echo 'ZC-5A build proof completed without a Cloudflare account or remote deployment.'
+          echo 'ZC-5A proof used only a disposable runner-side Edge middleware bridge.'
