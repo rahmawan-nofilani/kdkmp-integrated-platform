@@ -18,7 +18,7 @@
 --   * no DELETE/prune/purge path is granted or implemented;
 --   * ELIGIBLE_FOR_PRUNE is deliberately blocked until a later owner-authorized phase;
 --   * Cloudflare R2 and paid storage remain NOT AUTHORIZED / NOT ACTIVATED;
---   * ordinary authenticated users receive SELECT only when permission + scope pass.
+--   * ordinary authenticated users receive SELECT only when permission + node scope pass.
 
 create table public.system_archive_runs (
   id uuid primary key default gen_random_uuid(),
@@ -108,14 +108,66 @@ create index idx_system_archive_recovery_tests_archive_created
 alter table public.system_archive_runs enable row level security;
 alter table public.system_archive_recovery_tests enable row level security;
 
--- Archive metadata is tenant-scoped. SYSTEM_CAPACITY_VIEW alone is not enough:
--- the current profile must also have access to the owning organization.
+-- Node-aware scope guard for archive metadata. REGION_SCOPE may see descendant
+-- nodes of its assigned node; COOPERATIVE_SCOPE may see its assigned KDKMP node.
+-- UNIT_SCOPE is intentionally not sufficient for cooperative-level archive metadata.
+create or replace function app_private.can_access_archive_node(
+  p_organization_id uuid,
+  p_organization_node_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path=''
+as $$
+  with recursive target_lineage as (
+    select n.id,n.parent_id,n.organization_id
+    from public.organization_nodes n
+    where n.id=p_organization_node_id
+      and n.organization_id=p_organization_id
+
+    union all
+
+    select parent.id,parent.parent_id,parent.organization_id
+    from public.organization_nodes parent
+    join target_lineage child on child.parent_id=parent.id
+    where parent.organization_id=p_organization_id
+  ), active_scopes as (
+    select ds.scope_type,ds.organization_node_id
+    from public.user_scope_assignments usa
+    join public.data_scopes ds on ds.id=usa.data_scope_id
+    where usa.profile_id=app_private.current_profile_id()
+      and usa.valid_from<=now()
+      and (usa.valid_until is null or usa.valid_until>now())
+      and ds.organization_id=p_organization_id
+  )
+  select (select auth.uid()) is not null
+    and p_organization_id=app_private.current_organization_id()
+    and exists (select 1 from target_lineage)
+    and exists (
+      select 1
+      from active_scopes s
+      where s.scope_type='PLATFORM_SCOPE'
+         or (
+           s.scope_type in ('REGION_SCOPE','COOPERATIVE_SCOPE')
+           and s.organization_node_id in (select id from target_lineage)
+         )
+    )
+$$;
+
+revoke all on function app_private.can_access_archive_node(uuid,uuid)
+  from public,anon;
+grant execute on function app_private.can_access_archive_node(uuid,uuid)
+  to authenticated;
+
+-- Archive metadata requires both explicit permission and hierarchical node scope.
 create policy system_archive_runs_read
 on public.system_archive_runs
 for select to authenticated
 using (
   (select app_private.has_permission('SYSTEM_CAPACITY_VIEW'))
-  and (select app_private.can_access_organization(organization_id))
+  and (select app_private.can_access_archive_node(organization_id,organization_node_id))
 );
 
 create policy system_archive_recovery_tests_read
@@ -126,7 +178,7 @@ using (
   and exists (
     select 1
     from public.system_archive_runs ar
-    where ar.id = archive_run_id
+    where ar.id=public.system_archive_recovery_tests.archive_run_id
   )
 );
 
@@ -154,10 +206,10 @@ begin
   select n.organization_id
     into v_node_organization_id
   from public.organization_nodes n
-  where n.id = new.organization_node_id;
+  where n.id=new.organization_node_id;
 
   if v_node_organization_id is null
-     or v_node_organization_id <> new.organization_id then
+     or v_node_organization_id<>new.organization_id then
     raise exception 'archive_node_organization_mismatch';
   end if;
 
@@ -173,21 +225,24 @@ before insert or update of organization_id,organization_node_id
 on public.system_archive_runs
 for each row execute function app_private.guard_system_archive_run_scope();
 
--- Archive state machine. The current phase intentionally blocks the final
--- ELIGIBLE_FOR_PRUNE transition. That transition may only be unlocked by a
--- future migration after legal/audit hold controls and explicit owner approval.
+-- Archive state machine. RECOVERY_VERIFIED is terminal in this phase.
+-- ELIGIBLE_FOR_PRUNE exists in the model but is deliberately unreachable until
+-- a future owner-authorized migration adds legal/audit hold controls and unlocks it.
 create or replace function app_private.guard_system_archive_run_transition()
 returns trigger
 language plpgsql
 set search_path=''
 as $$
 begin
-  if old.status in ('ELIGIBLE_FOR_PRUNE','FAILED','CANCELLED')
+  if old.status in ('RECOVERY_VERIFIED','ELIGIBLE_FOR_PRUNE','FAILED','CANCELLED')
      and new is distinct from old then
+    if old.status='RECOVERY_VERIFIED' and new.status='ELIGIBLE_FOR_PRUNE' then
+      raise exception 'archive_prune_eligibility_not_activated';
+    end if;
     raise exception 'terminal_archive_run_is_immutable';
   end if;
 
-  if old.status <> new.status then
+  if old.status<>new.status then
     if old.status='REQUESTED'
        and new.status not in ('SNAPSHOTTED','FAILED','CANCELLED') then
       raise exception 'invalid_archive_status_transition';
@@ -203,53 +258,49 @@ begin
     elsif old.status='READBACK_VERIFIED'
        and new.status not in ('RECOVERY_VERIFIED','FAILED') then
       raise exception 'invalid_archive_status_transition';
-    elsif old.status='RECOVERY_VERIFIED' then
-      if new.status='ELIGIBLE_FOR_PRUNE' then
-        raise exception 'archive_prune_eligibility_not_activated';
-      elsif new.status not in ('FAILED') then
-        raise exception 'invalid_archive_status_transition';
-      end if;
     end if;
   end if;
 
   if new.status='SNAPSHOTTED' then
-    new.snapshotted_at := coalesce(new.snapshotted_at,now());
+    new.snapshotted_at:=coalesce(new.snapshotted_at,now());
   end if;
 
   if new.status in ('PACKAGED','WRITTEN','READBACK_VERIFIED','RECOVERY_VERIFIED') then
-    if new.size_bytes is null or new.sha256 is null
-       or new.manifest = '{}'::jsonb
-       or new.source_row_counts = '{}'::jsonb
-       or new.reconciliation_checks = '{}'::jsonb then
+    if new.encrypted is not true
+       or new.size_bytes is null
+       or new.sha256 is null
+       or new.manifest='{}'::jsonb
+       or new.source_row_counts='{}'::jsonb
+       or new.reconciliation_checks='{}'::jsonb then
       raise exception 'archive_package_requires_integrity_metadata';
     end if;
-    new.packaged_at := coalesce(new.packaged_at,now());
+    new.packaged_at:=coalesce(new.packaged_at,now());
   end if;
 
   if new.status in ('WRITTEN','READBACK_VERIFIED','RECOVERY_VERIFIED') then
     if new.storage_provider='UNASSIGNED' or new.object_key is null then
       raise exception 'written_archive_requires_destination_identity';
     end if;
-    new.written_at := coalesce(new.written_at,now());
+    new.written_at:=coalesce(new.written_at,now());
   end if;
 
   if new.status in ('READBACK_VERIFIED','RECOVERY_VERIFIED') then
-    new.readback_verified_at := coalesce(new.readback_verified_at,now());
+    new.readback_verified_at:=coalesce(new.readback_verified_at,now());
   end if;
 
   if new.status='RECOVERY_VERIFIED' then
     if not exists (
       select 1
       from public.system_archive_recovery_tests rt
-      where rt.archive_run_id = new.id
+      where rt.archive_run_id=new.id
         and rt.status='PASSED'
     ) then
       raise exception 'archive_recovery_verified_requires_passed_test';
     end if;
-    new.recovery_verified_at := coalesce(new.recovery_verified_at,now());
-    new.completed_at := coalesce(new.completed_at,now());
+    new.recovery_verified_at:=coalesce(new.recovery_verified_at,now());
+    new.completed_at:=coalesce(new.completed_at,now());
   elsif new.status in ('FAILED','CANCELLED') then
-    new.completed_at := coalesce(new.completed_at,now());
+    new.completed_at:=coalesce(new.completed_at,now());
   end if;
 
   return new;
@@ -274,7 +325,7 @@ begin
     raise exception 'terminal_archive_recovery_test_is_immutable';
   end if;
 
-  if old.status <> new.status then
+  if old.status<>new.status then
     if old.status='REQUESTED'
        and new.status not in ('RUNNING','FAILED','CANCELLED') then
       raise exception 'invalid_archive_recovery_status_transition';
@@ -285,13 +336,13 @@ begin
   end if;
 
   if new.status='RUNNING' then
-    new.started_at := coalesce(new.started_at,now());
+    new.started_at:=coalesce(new.started_at,now());
   end if;
 
   if new.status in ('PASSED','FAILED','CANCELLED') then
-    new.completed_at := coalesce(new.completed_at,now());
+    new.completed_at:=coalesce(new.completed_at,now());
     if new.started_at is not null and new.duration_seconds is null then
-      new.duration_seconds := greatest(
+      new.duration_seconds:=greatest(
         0,
         extract(epoch from (new.completed_at-new.started_at))::integer
       );
