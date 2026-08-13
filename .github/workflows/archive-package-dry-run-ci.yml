@@ -1,0 +1,72 @@
+name: Archive Package Dry-Run CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/archive/zc4c-package-dry-run.sh'
+      - '.github/workflows/archive-package-dry-run-ci.yml'
+      - 'docs/operations/zc4c-archive-integrity-dry-run.md'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/archive/zc4c-package-dry-run.sh'
+      - '.github/workflows/archive-package-dry-run-ci.yml'
+      - 'docs/operations/zc4c-archive-integrity-dry-run.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-package-dry-run-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  synthetic_package_dry_run:
+    name: synthetic encrypted package + local read-back
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail closed on unsafe dry-run script changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCRIPT='scripts/archive/zc4c-package-dry-run.sh'
+          test -s "$SCRIPT"
+
+          # The dry-run must remain synthetic and local-only. It may not grow a
+          # database/network/storage side effect without a separately reviewed phase.
+          grep -q 'CI_DRY_RUN_SYNTHETIC_ONLY' "$SCRIPT"
+          grep -q 'remote_database_touched=false' "$SCRIPT"
+          grep -q 'external_storage_touched=false' "$SCRIPT"
+
+          if grep -Eiq '\b(curl|wget|psql|supabase|aws|rclone|wrangler|scp|rsync|ssh)\b' "$SCRIPT"; then
+            echo 'Network, database, or remote-storage command detected in synthetic dry-run script.' >&2
+            exit 1
+          fi
+
+          if grep -Eiq '\b(delete[[:space:]]+from|drop[[:space:]]+table|truncate[[:space:]]+table|rm[[:space:]]+-rf[[:space:]]+/|shred)\b' "$SCRIPT"; then
+            echo 'Destructive token detected in synthetic dry-run script.' >&2
+            exit 1
+          fi
+
+      - name: Execute synthetic package dry-run
+        shell: bash
+        env:
+          ARCHIVE_DRY_RUN_ID: ${{ github.run_id }}
+          ARCHIVE_DRY_RUN_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/archive/zc4c-package-dry-run.sh
+
+      - name: Confirm no persistent artifact publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Dry-run passed. No package artifact is uploaded or retained by this workflow.'

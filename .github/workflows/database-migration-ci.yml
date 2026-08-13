@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'database/migrations/**'
+      - 'database/drafts/zc4c_archive_integrity_hardening.sql'
       - 'database/seeds/001_development_demo_organization.sql'
       - '.github/workflows/database-migration-ci.yml'
   push:
@@ -13,6 +14,7 @@ on:
       - main
     paths:
       - 'database/migrations/**'
+      - 'database/drafts/zc4c_archive_integrity_hardening.sql'
       - 'database/seeds/001_development_demo_organization.sql'
       - '.github/workflows/database-migration-ci.yml'
 
@@ -25,13 +27,16 @@ concurrency:
 
 jobs:
   validate_migrations:
-    name: replay migrations + ZC-4B invariants
+    name: replay migrations + ZC-4B/ZC-4C invariants
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
       SUPABASE_CLI_VERSION: "2.113.0"
       ZC4B_MIGRATION: database/migrations/20260813094003_zc4b_archive_registry_foundation.sql
       ZC4B_EXPECTED_SHA256: 1acda9aca3096f1c547498de180cbb583c49d48a8278ee4ec6452cf3017a9c41
+      ZC4C_MIGRATION: database/migrations/20260813100013_zc4c_archive_integrity_hardening.sql
+      ZC4C_REVIEWED_DRAFT: database/drafts/zc4c_archive_integrity_hardening.sql
+      ZC4C_EXPECTED_SHA256: 7946a597bb3b77d7c9cbb95146f3629b3ed54be68ff40b2fc3b8ef52a7a38abd
       HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
       HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
       LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
@@ -58,13 +63,28 @@ jobs:
         run: |
           set -euo pipefail
           test -s "$ZC4B_MIGRATION"
+          test -s "$ZC4C_MIGRATION"
+          test -s "$ZC4C_REVIEWED_DRAFT"
           test -s "$HISTORICAL_DEMO_BOOTSTRAP"
 
-          ACTUAL_SHA256="$(sha256sum "$ZC4B_MIGRATION" | awk '{print $1}')"
-          if [ "$ACTUAL_SHA256" != "$ZC4B_EXPECTED_SHA256" ]; then
+          ZC4B_ACTUAL_SHA256="$(sha256sum "$ZC4B_MIGRATION" | awk '{print $1}')"
+          if [ "$ZC4B_ACTUAL_SHA256" != "$ZC4B_EXPECTED_SHA256" ]; then
             echo "ZC-4B migration does not match the reviewed/generated SQL artifact." >&2
             echo "Expected: $ZC4B_EXPECTED_SHA256" >&2
-            echo "Actual:   $ACTUAL_SHA256" >&2
+            echo "Actual:   $ZC4B_ACTUAL_SHA256" >&2
+            exit 1
+          fi
+
+          ZC4C_ACTUAL_SHA256="$(sha256sum "$ZC4C_MIGRATION" | awk '{print $1}')"
+          if [ "$ZC4C_ACTUAL_SHA256" != "$ZC4C_EXPECTED_SHA256" ]; then
+            echo "ZC-4C migration does not match the pinned generator proof." >&2
+            echo "Expected: $ZC4C_EXPECTED_SHA256" >&2
+            echo "Actual:   $ZC4C_ACTUAL_SHA256" >&2
+            exit 1
+          fi
+
+          if ! cmp -s "$ZC4C_MIGRATION" "$ZC4C_REVIEWED_DRAFT"; then
+            echo "ZC-4C migration is not byte-identical to the reviewed draft." >&2
             exit 1
           fi
 
@@ -121,7 +141,7 @@ jobs:
           cd "${{ steps.prepare.outputs.workdir }}"
           npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
 
-      - name: Verify ZC-4B schema, RLS, grants, indexes and policies
+      - name: Verify archive schema, RLS, grants, indexes and hardening constraints
         shell: bash
         run: |
           set -euo pipefail
@@ -222,10 +242,34 @@ jobs:
                or to_regprocedure('app_private.guard_system_archive_recovery_test_transition()') is null then
               raise exception 'archive_registry_guard_function_missing';
             end if;
+
+            if not exists (
+              select 1 from pg_constraint
+              where conrelid='public.system_archive_runs'::regclass
+                and conname='system_archive_runs_size_bytes_positive'
+            ) then
+              raise exception 'archive_positive_size_constraint_missing';
+            end if;
+
+            if not exists (
+              select 1 from pg_constraint
+              where conrelid='public.system_archive_runs'::regclass
+                and conname='system_archive_runs_object_key_nonblank'
+            ) then
+              raise exception 'archive_nonblank_object_key_constraint_missing';
+            end if;
+
+            if not exists (
+              select 1 from pg_constraint
+              where conrelid='public.system_archive_recovery_tests'::regclass
+                and conname='system_archive_recovery_tests_passed_evidence'
+            ) then
+              raise exception 'archive_passed_evidence_constraint_missing';
+            end if;
           end $$;
           SQL
 
-      - name: Exercise ZC-4B fail-closed state machine
+      - name: Exercise ZC-4B/ZC-4C fail-closed state machine
         shell: bash
         run: |
           set -euo pipefail
@@ -244,11 +288,11 @@ jobs:
             v_recovery uuid;
           begin
             insert into public.organizations(code,name,status)
-            values ('ZC4B-CI-ORG','ZC-4B CI Organization','ACTIVE')
+            values ('ZC4C-CI-ORG','ZC-4C CI Organization','ACTIVE')
             returning id into v_org;
 
             insert into public.organization_nodes(organization_id,node_type,code,name,status)
-            values (v_org,'KDKMP','ZC4B-CI-KDKMP','ZC-4B CI KDKMP','ACTIVE')
+            values (v_org,'KDKMP','ZC4C-CI-KDKMP','ZC-4C CI KDKMP','ACTIVE')
             returning id into v_node;
 
             begin
@@ -256,7 +300,7 @@ jobs:
                 archive_run_number,organization_id,organization_node_id,archive_class,
                 source_period_start,source_period_end,source_schema_version,application_commit_sha,status
               ) values (
-                'ARC-CI-INVALID-START',v_org,v_node,'POS_TRANSACTION',
+                'ARC-ZC4C-CI-INVALID-START',v_org,v_node,'POS_TRANSACTION',
                 '2026-01-01T00:00:00Z','2026-02-01T00:00:00Z','ci-schema','0000000000000000000000000000000000000000','WRITTEN'
               );
               raise exception 'test_expected_archive_start_failure_not_raised';
@@ -269,7 +313,7 @@ jobs:
               archive_run_number,organization_id,organization_node_id,archive_class,
               source_period_start,source_period_end,source_schema_version,application_commit_sha
             ) values (
-              'ARC-CI-VALID',v_org,v_node,'POS_TRANSACTION',
+              'ARC-ZC4C-CI-VALID',v_org,v_node,'POS_TRANSACTION',
               '2026-01-01T00:00:00Z','2026-02-01T00:00:00Z','ci-schema','0000000000000000000000000000000000000000'
             ) returning id into v_run;
 
@@ -291,12 +335,27 @@ jobs:
               if sqlerrm<>'archive_package_requires_integrity_metadata' then raise; end if;
             end;
 
+            begin
+              update public.system_archive_runs
+              set status='PACKAGED',
+                  size_bytes=0,
+                  sha256=repeat('0',64),
+                  manifest='{"ci":true}'::jsonb,
+                  source_row_counts='{"sales_transactions":1}'::jsonb,
+                  reconciliation_checks='{"row_counts_match":true}'::jsonb
+              where id=v_run;
+              raise exception 'test_expected_positive_size_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_positive_size_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_package_requires_positive_size' then raise; end if;
+            end;
+
             update public.system_archive_runs
             set status='PACKAGED',
                 size_bytes=123,
                 sha256=repeat('0',64),
                 manifest='{"ci":true}'::jsonb,
-                source_row_counts='{"sales_transactions":0}'::jsonb,
+                source_row_counts='{"sales_transactions":1}'::jsonb,
                 reconciliation_checks='{"row_counts_match":true}'::jsonb
             where id=v_run;
 
@@ -305,6 +364,16 @@ jobs:
               raise exception 'test_expected_destination_gate_not_raised';
             exception when others then
               if sqlerrm='test_expected_destination_gate_not_raised' then raise; end if;
+              if sqlerrm<>'written_archive_requires_destination_identity' then raise; end if;
+            end;
+
+            begin
+              update public.system_archive_runs
+              set status='WRITTEN', storage_provider='MANUAL_OFFSITE', object_key='   '
+              where id=v_run;
+              raise exception 'test_expected_blank_destination_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_blank_destination_gate_not_raised' then raise; end if;
               if sqlerrm<>'written_archive_requires_destination_identity' then raise; end if;
             end;
 
@@ -325,7 +394,7 @@ jobs:
             begin
               insert into public.system_archive_recovery_tests(
                 archive_run_id,recovery_test_number,status,target_type
-              ) values (v_run,'RST-CI-INVALID-START','PASSED','TEMPORARY_LOCAL');
+              ) values (v_run,'RST-ZC4C-CI-INVALID-START','PASSED','TEMPORARY_LOCAL');
               raise exception 'test_expected_recovery_start_failure_not_raised';
             exception when others then
               if sqlerrm='test_expected_recovery_start_failure_not_raised' then raise; end if;
@@ -333,14 +402,52 @@ jobs:
             end;
 
             insert into public.system_archive_recovery_tests(
-              archive_run_id,recovery_test_number,target_type,row_count_checks,integrity_checks
+              archive_run_id,recovery_test_number,target_type
             ) values (
-              v_run,'RST-CI-VALID','TEMPORARY_LOCAL',
-              '{"row_counts_match":true}'::jsonb,
-              '{"sha256_match":true,"decryptable":true}'::jsonb
+              v_run,'RST-ZC4C-CI-VALID','TEMPORARY_LOCAL'
             ) returning id into v_recovery;
 
             update public.system_archive_recovery_tests set status='RUNNING' where id=v_recovery;
+
+            begin
+              update public.system_archive_recovery_tests set status='PASSED' where id=v_recovery;
+              raise exception 'test_expected_empty_recovery_evidence_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_empty_recovery_evidence_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_recovery_passed_requires_evidence' then raise; end if;
+            end;
+
+            update public.system_archive_recovery_tests
+            set row_count_checks='{"row_counts_match":false}'::jsonb,
+                integrity_checks='{"sha256_match":true,"decryptable":true}'::jsonb
+            where id=v_recovery;
+
+            begin
+              update public.system_archive_recovery_tests set status='PASSED' where id=v_recovery;
+              raise exception 'test_expected_row_count_evidence_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_row_count_evidence_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_recovery_passed_requires_evidence' then raise; end if;
+            end;
+
+            update public.system_archive_recovery_tests
+            set row_count_checks='{"row_counts_match":true}'::jsonb,
+                integrity_checks='{"sha256_match":false,"decryptable":true}'::jsonb
+            where id=v_recovery;
+
+            begin
+              update public.system_archive_recovery_tests set status='PASSED' where id=v_recovery;
+              raise exception 'test_expected_sha_evidence_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_sha_evidence_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_recovery_passed_requires_evidence' then raise; end if;
+            end;
+
+            update public.system_archive_recovery_tests
+            set row_count_checks='{"row_counts_match":true,"source_total":1,"recovered_total":1}'::jsonb,
+                integrity_checks='{"sha256_match":true,"decryptable":true,"manifest_match":true}'::jsonb
+            where id=v_recovery;
+
             update public.system_archive_recovery_tests set status='PASSED' where id=v_recovery;
 
             begin
