@@ -1,0 +1,365 @@
+name: Database Migration CI
+
+on:
+  push:
+    branches:
+      - agent/zc4b-archive-registry-activation
+    paths:
+      - 'database/migrations/**'
+      - '.github/workflows/database-migration-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'database/migrations/**'
+      - '.github/workflows/database-migration-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-migration-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate_migrations:
+    name: replay migrations + ZC-4B invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      ZC4B_MIGRATION: database/migrations/20260813091951_zc4b_archive_registry_foundation.sql
+      ZC4B_EXPECTED_SHA256: 1acda9aca3096f1c547498de180cbb583c49d48a8278ee4ec6452cf3017a9c41
+      LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          if [ "$ACTUAL_VERSION" != "$SUPABASE_CLI_VERSION" ]; then
+            echo "Pinned Supabase CLI version mismatch: expected $SUPABASE_CLI_VERSION, got $ACTUAL_VERSION" >&2
+            exit 1
+          fi
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start --help >/dev/null
+          echo "Using pinned Supabase CLI $ACTUAL_VERSION"
+
+      - name: Prepare isolated migration workspace
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$ZC4B_MIGRATION"
+
+          ACTUAL_SHA256="$(sha256sum "$ZC4B_MIGRATION" | awk '{print $1}')"
+          if [ "$ACTUAL_SHA256" != "$ZC4B_EXPECTED_SHA256" ]; then
+            echo "ZC-4B migration does not match the CLI-generated reviewed artifact." >&2
+            echo "Expected: $ZC4B_EXPECTED_SHA256" >&2
+            echo "Actual:   $ACTUAL_SHA256" >&2
+            exit 1
+          fi
+
+          WORKDIR="$RUNNER_TEMP/kdkmp-migration-ci"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+
+          MIGRATION_COUNT="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+          if [ "$MIGRATION_COUNT" -lt 1 ]; then
+            echo "No repository migrations were copied into the isolated workspace." >&2
+            exit 1
+          fi
+
+          INVALID_NAMES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
+            | grep -Ev '^[0-9]{14}_[a-z0-9_]+\.sql$' || true)"
+          if [ -n "$INVALID_NAMES" ]; then
+            echo "Migration filenames outside the required timestamp_name.sql contract:" >&2
+            printf '%s\n' "$INVALID_NAMES" >&2
+            exit 1
+          fi
+
+          DUPLICATE_VERSIONS="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
+            | cut -c1-14 | sort | uniq -d)"
+          if [ -n "$DUPLICATE_VERSIONS" ]; then
+            echo "Duplicate migration timestamp/version detected:" >&2
+            printf '%s\n' "$DUPLICATE_VERSIONS" >&2
+            exit 1
+          fi
+
+          echo "Prepared $MIGRATION_COUNT migrations for isolated replay."
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+
+      - name: Start isolated Supabase database and replay every migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
+
+      - name: Verify ZC-4B schema, RLS, grants, indexes and policies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if command -v psql >/dev/null 2>&1; then
+            PSQL=(psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
+          else
+            PSQL=(docker run --rm --network host -i postgres:17-alpine psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
+          fi
+
+          "${PSQL[@]}" <<'SQL'
+          do $$
+          begin
+            if to_regclass('public.system_archive_runs') is null then
+              raise exception 'system_archive_runs_missing';
+            end if;
+            if to_regclass('public.system_archive_recovery_tests') is null then
+              raise exception 'system_archive_recovery_tests_missing';
+            end if;
+
+            if not exists (
+              select 1
+              from pg_class c
+              join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname='system_archive_runs' and c.relrowsecurity
+            ) then
+              raise exception 'system_archive_runs_rls_not_enabled';
+            end if;
+
+            if not exists (
+              select 1
+              from pg_class c
+              join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname='system_archive_recovery_tests' and c.relrowsecurity
+            ) then
+              raise exception 'system_archive_recovery_tests_rls_not_enabled';
+            end if;
+
+            if exists (
+              select 1 from information_schema.role_table_grants
+              where table_schema='public'
+                and table_name in ('system_archive_runs','system_archive_recovery_tests')
+                and grantee='anon'
+            ) then
+              raise exception 'anon_must_have_no_archive_registry_grants';
+            end if;
+
+            if exists (
+              select 1 from information_schema.role_table_grants
+              where table_schema='public'
+                and table_name in ('system_archive_runs','system_archive_recovery_tests')
+                and grantee='authenticated'
+                and privilege_type<>'SELECT'
+            ) then
+              raise exception 'authenticated_archive_registry_must_be_select_only';
+            end if;
+
+            if (
+              select count(distinct table_name)
+              from information_schema.role_table_grants
+              where table_schema='public'
+                and table_name in ('system_archive_runs','system_archive_recovery_tests')
+                and grantee='authenticated'
+                and privilege_type='SELECT'
+            ) <> 2 then
+              raise exception 'authenticated_select_grant_missing';
+            end if;
+
+            if not exists (
+              select 1 from pg_policies
+              where schemaname='public'
+                and tablename='system_archive_runs'
+                and policyname='system_archive_runs_read'
+                and roles @> array['authenticated']::name[]
+                and qual ilike '%has_permission%'
+                and qual ilike '%can_access_archive_node%'
+            ) then
+              raise exception 'archive_run_scope_policy_contract_missing';
+            end if;
+
+            if not exists (
+              select 1 from pg_policies
+              where schemaname='public'
+                and tablename='system_archive_recovery_tests'
+                and policyname='system_archive_recovery_tests_read'
+                and roles @> array['authenticated']::name[]
+            ) then
+              raise exception 'archive_recovery_policy_contract_missing';
+            end if;
+
+            if to_regclass('public.idx_system_archive_runs_organization_created') is null
+               or to_regclass('public.idx_system_archive_runs_node_created') is null
+               or to_regclass('public.idx_system_archive_runs_status_class_period') is null
+               or to_regclass('public.idx_system_archive_recovery_tests_archive_created') is null then
+              raise exception 'archive_registry_covering_index_missing';
+            end if;
+
+            if to_regprocedure('app_private.can_access_archive_node(uuid,uuid)') is null
+               or to_regprocedure('app_private.guard_system_archive_run_scope()') is null
+               or to_regprocedure('app_private.guard_system_archive_run_transition()') is null
+               or to_regprocedure('app_private.guard_system_archive_recovery_test_transition()') is null then
+              raise exception 'archive_registry_guard_function_missing';
+            end if;
+          end $$;
+          SQL
+
+      - name: Exercise ZC-4B fail-closed state machine
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if command -v psql >/dev/null 2>&1; then
+            PSQL=(psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
+          else
+            PSQL=(docker run --rm --network host -i postgres:17-alpine psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
+          fi
+
+          "${PSQL[@]}" <<'SQL'
+          do $$
+          declare
+            v_org uuid;
+            v_node uuid;
+            v_run uuid;
+            v_recovery uuid;
+          begin
+            insert into public.organizations(code,name,status)
+            values ('ZC4B-CI-ORG','ZC-4B CI Organization','ACTIVE')
+            returning id into v_org;
+
+            insert into public.organization_nodes(organization_id,node_type,code,name,status)
+            values (v_org,'KDKMP','ZC4B-CI-KDKMP','ZC-4B CI KDKMP','ACTIVE')
+            returning id into v_node;
+
+            begin
+              insert into public.system_archive_runs(
+                archive_run_number,organization_id,organization_node_id,archive_class,
+                source_period_start,source_period_end,source_schema_version,application_commit_sha,status
+              ) values (
+                'ARC-CI-INVALID-START',v_org,v_node,'POS_TRANSACTION',
+                '2026-01-01T00:00:00Z','2026-02-01T00:00:00Z','ci-schema','0000000000000000000000000000000000000000','WRITTEN'
+              );
+              raise exception 'test_expected_archive_start_failure_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_archive_start_failure_not_raised' then raise; end if;
+              if sqlerrm<>'archive_run_must_start_requested' then raise; end if;
+            end;
+
+            insert into public.system_archive_runs(
+              archive_run_number,organization_id,organization_node_id,archive_class,
+              source_period_start,source_period_end,source_schema_version,application_commit_sha
+            ) values (
+              'ARC-CI-VALID',v_org,v_node,'POS_TRANSACTION',
+              '2026-01-01T00:00:00Z','2026-02-01T00:00:00Z','ci-schema','0000000000000000000000000000000000000000'
+            ) returning id into v_run;
+
+            begin
+              update public.system_archive_runs set status='WRITTEN' where id=v_run;
+              raise exception 'test_expected_invalid_transition_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_invalid_transition_not_raised' then raise; end if;
+              if sqlerrm<>'invalid_archive_status_transition' then raise; end if;
+            end;
+
+            update public.system_archive_runs
+            set status='SNAPSHOTTED'
+            where id=v_run;
+
+            begin
+              update public.system_archive_runs set status='PACKAGED' where id=v_run;
+              raise exception 'test_expected_integrity_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_integrity_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_package_requires_integrity_metadata' then raise; end if;
+            end;
+
+            update public.system_archive_runs
+            set status='PACKAGED',
+                size_bytes=123,
+                sha256=repeat('0',64),
+                manifest='{"ci":true}'::jsonb,
+                source_row_counts='{"sales_transactions":0}'::jsonb,
+                reconciliation_checks='{"row_counts_match":true}'::jsonb
+            where id=v_run;
+
+            begin
+              update public.system_archive_runs set status='WRITTEN' where id=v_run;
+              raise exception 'test_expected_destination_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_destination_gate_not_raised' then raise; end if;
+              if sqlerrm<>'written_archive_requires_destination_identity' then raise; end if;
+            end;
+
+            update public.system_archive_runs
+            set status='WRITTEN', storage_provider='MANUAL_OFFSITE', object_key='ci/archive.enc'
+            where id=v_run;
+
+            update public.system_archive_runs
+            set status='READBACK_VERIFIED'
+            where id=v_run;
+
+            begin
+              update public.system_archive_runs set status='RECOVERY_VERIFIED' where id=v_run;
+              raise exception 'test_expected_recovery_gate_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_recovery_gate_not_raised' then raise; end if;
+              if sqlerrm<>'archive_recovery_verified_requires_passed_test' then raise; end if;
+            end;
+
+            begin
+              insert into public.system_archive_recovery_tests(
+                archive_run_id,recovery_test_number,status,target_type
+              ) values (v_run,'RST-CI-INVALID-START','PASSED','TEMPORARY_LOCAL');
+              raise exception 'test_expected_recovery_start_failure_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_recovery_start_failure_not_raised' then raise; end if;
+              if sqlerrm<>'archive_recovery_test_must_start_requested' then raise; end if;
+            end;
+
+            insert into public.system_archive_recovery_tests(
+              archive_run_id,recovery_test_number,target_type,row_count_checks,integrity_checks
+            ) values (
+              v_run,'RST-CI-VALID','TEMPORARY_LOCAL',
+              '{"row_counts_match":true}'::jsonb,
+              '{"sha256_match":true,"decryptable":true}'::jsonb
+            ) returning id into v_recovery;
+
+            update public.system_archive_recovery_tests set status='RUNNING' where id=v_recovery;
+            update public.system_archive_recovery_tests set status='PASSED' where id=v_recovery;
+
+            begin
+              update public.system_archive_recovery_tests set notes='must fail after terminal' where id=v_recovery;
+              raise exception 'test_expected_terminal_recovery_immutability_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_terminal_recovery_immutability_not_raised' then raise; end if;
+              if sqlerrm<>'terminal_archive_recovery_test_is_immutable' then raise; end if;
+            end;
+
+            update public.system_archive_runs set status='RECOVERY_VERIFIED' where id=v_run;
+
+            begin
+              update public.system_archive_runs set status='ELIGIBLE_FOR_PRUNE' where id=v_run;
+              raise exception 'test_expected_prune_block_not_raised';
+            exception when others then
+              if sqlerrm='test_expected_prune_block_not_raised' then raise; end if;
+              if sqlerrm<>'archive_prune_eligibility_not_activated' then raise; end if;
+            end;
+          end $$;
+          SQL
+
+      - name: Stop isolated Supabase database
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          WORKDIR="${{ steps.prepare.outputs.workdir }}"
+          if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
+            cd "$WORKDIR"
+            npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup
+          fi
