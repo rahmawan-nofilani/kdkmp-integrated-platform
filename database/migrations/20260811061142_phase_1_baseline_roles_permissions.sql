@@ -69,14 +69,19 @@ values
  ('APPROVAL_DECIDE','GOVERNANCE','Make allowed approval decision',true)
 on conflict (code) do nothing;
 
+-- Baseline Manager permissions. Sensitive approvals remain subject to workflow and SoD checks.
 insert into public.role_permissions (role_id, permission_id)
-select r.id, p.id from public.roles r cross join public.permissions p
-where r.code = 'MANAGER' and p.code in (
- 'USER_VIEW','USER_CREATE','USER_UPDATE','USER_SUSPEND','USER_ARCHIVE','ROLE_VIEW','ROLE_ASSIGN','PERMISSION_VIEW','SCOPE_ASSIGN',
- 'MEMBER_VIEW','MEMBER_CREATE','MEMBER_UPDATE','PRODUCT_VIEW','PRODUCT_CREATE','PRODUCT_UPDATE','INVENTORY_VIEW','INVENTORY_RECEIVE','INVENTORY_TRANSFER','STOCK_OPNAME',
- 'PURCHASE_CREATE','PURCHASE_SUBMIT','SALES_CREATE','REPORT_VIEW','REPORT_EXPORT','AUDIT_VIEW','RISK_VIEW','RISK_UPDATE','CONTROL_REVIEW','DOCUMENT_VIEW','DOCUMENT_CREATE','APPROVAL_VIEW',
- 'SAVINGS_VIEW','LOAN_VIEW','LOAN_CREATE','LOAN_REVIEW','FINANCIAL_PRODUCT_CREATE'
-) on conflict do nothing;
+select r.id, p.id
+from public.roles r cross join public.permissions p
+where r.code = 'MANAGER'
+  and p.code in (
+   'USER_VIEW','USER_CREATE','USER_UPDATE','USER_SUSPEND','USER_ARCHIVE','ROLE_VIEW','ROLE_ASSIGN','PERMISSION_VIEW','SCOPE_ASSIGN',
+   'MEMBER_VIEW','MEMBER_CREATE','MEMBER_UPDATE','PRODUCT_VIEW','PRODUCT_CREATE','PRODUCT_UPDATE',
+   'INVENTORY_VIEW','INVENTORY_RECEIVE','INVENTORY_TRANSFER','STOCK_OPNAME',
+   'PURCHASE_CREATE','PURCHASE_SUBMIT','SALES_CREATE','REPORT_VIEW','REPORT_EXPORT','AUDIT_VIEW','RISK_VIEW','RISK_UPDATE','CONTROL_REVIEW','DOCUMENT_VIEW','DOCUMENT_CREATE','APPROVAL_VIEW',
+   'SAVINGS_VIEW','LOAN_VIEW','LOAN_CREATE','LOAN_REVIEW','FINANCIAL_PRODUCT_CREATE'
+  )
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
@@ -85,32 +90,40 @@ on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='MEMBER' and p.code in ('PRODUCT_VIEW','DOCUMENT_VIEW') on conflict do nothing;
+where r.code='MEMBER' and p.code in ('PRODUCT_VIEW','DOCUMENT_VIEW')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='SUPERVISOR' and p.code in ('REPORT_VIEW','AUDIT_VIEW','RISK_VIEW','CONTROL_REVIEW','DOCUMENT_VIEW','MEMBER_VIEW','INVENTORY_VIEW','LOAN_VIEW','SAVINGS_VIEW') on conflict do nothing;
+where r.code='SUPERVISOR' and p.code in ('REPORT_VIEW','AUDIT_VIEW','RISK_VIEW','CONTROL_REVIEW','DOCUMENT_VIEW','MEMBER_VIEW','INVENTORY_VIEW','LOAN_VIEW','SAVINGS_VIEW')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='BOARD' and p.code in ('REPORT_VIEW','AUDIT_VIEW','RISK_VIEW','DOCUMENT_VIEW','APPROVAL_VIEW','APPROVAL_DECIDE','LOAN_VIEW','SAVINGS_VIEW') on conflict do nothing;
+where r.code='BOARD' and p.code in ('REPORT_VIEW','AUDIT_VIEW','RISK_VIEW','DOCUMENT_VIEW','APPROVAL_VIEW','APPROVAL_DECIDE','LOAN_VIEW','SAVINGS_VIEW')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='CASHIER' and p.code in ('PRODUCT_VIEW','SALES_CREATE') on conflict do nothing;
+where r.code='CASHIER' and p.code in ('PRODUCT_VIEW','SALES_CREATE')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='WAREHOUSE_OPERATOR' and p.code in ('INVENTORY_VIEW','INVENTORY_RECEIVE','INVENTORY_TRANSFER','STOCK_OPNAME') on conflict do nothing;
+where r.code='WAREHOUSE_OPERATOR' and p.code in ('INVENTORY_VIEW','INVENTORY_RECEIVE','INVENTORY_TRANSFER','STOCK_OPNAME')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='TELLER' and p.code in ('SAVINGS_VIEW','SAVINGS_DEPOSIT','SAVINGS_WITHDRAW','LOAN_VIEW','LOAN_COLLECT') on conflict do nothing;
+where r.code='TELLER' and p.code in ('SAVINGS_VIEW','SAVINGS_DEPOSIT','SAVINGS_WITHDRAW','LOAN_VIEW','LOAN_COLLECT')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='LOAN_OFFICER' and p.code in ('LOAN_VIEW','LOAN_CREATE','LOAN_REVIEW','MEMBER_VIEW','DOCUMENT_VIEW') on conflict do nothing;
+where r.code='LOAN_OFFICER' and p.code in ('LOAN_VIEW','LOAN_CREATE','LOAN_REVIEW','MEMBER_VIEW','DOCUMENT_VIEW')
+on conflict do nothing;
 
 insert into public.role_permissions (role_id, permission_id)
 select r.id, p.id from public.roles r cross join public.permissions p
-where r.code='COMPLIANCE_OFFICER' and p.code in ('LOAN_VIEW','SAVINGS_VIEW','AUDIT_VIEW','RISK_VIEW','CONTROL_REVIEW','DOCUMENT_VIEW','FINANCIAL_PRODUCT_APPROVE') on conflict do nothing;
+where r.code='COMPLIANCE_OFFICER' and p.code in ('LOAN_VIEW','SAVINGS_VIEW','AUDIT_VIEW','RISK_VIEW','CONTROL_REVIEW','DOCUMENT_VIEW','FINANCIAL_PRODUCT_APPROVE')
+on conflict do nothing;
