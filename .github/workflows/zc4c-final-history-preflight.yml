@@ -1,0 +1,74 @@
+name: ZC-4C Final History Preflight
+
+on:
+  push:
+    branches:
+      - agent/zc4c-history-preflight-final
+    paths:
+      - '.github/workflows/zc4c-final-history-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  history_preflight:
+    name: compare repository and DEVELOPMENT migration versions read-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate protected connection and pinned CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_DB_URL"
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'SUPABASE_DB_URL has an unexpected scheme.' >&2; exit 1 ;;
+          esac
+          ACTUAL="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL" = "$SUPABASE_CLI_VERSION"
+
+      - name: Compare migration version sets
+        shell: bash
+        run: |
+          set -euo pipefail
+          find database/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
+            | cut -c1-14 | sort -u > "$RUNNER_TEMP/local-versions.txt"
+
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
+            -c "select version from supabase_migrations.schema_migrations order by version" \
+            | sed '/^[[:space:]]*$/d' | sort -u > "$RUNNER_TEMP/remote-versions.txt"
+
+          comm -23 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" \
+            > "$RUNNER_TEMP/local-only.txt"
+          comm -13 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" \
+            > "$RUNNER_TEMP/remote-only.txt"
+
+          echo 'Local-only migration versions:'
+          cat "$RUNNER_TEMP/local-only.txt"
+          echo 'Remote-only migration versions:'
+          cat "$RUNNER_TEMP/remote-only.txt"
+
+          printf '%s\n' \
+            20260811130715 \
+            20260813100013 \
+            20260813104050 \
+            > "$RUNNER_TEMP/expected-local-only.txt"
+
+          diff -u "$RUNNER_TEMP/expected-local-only.txt" "$RUNNER_TEMP/local-only.txt"
+
+          if [ -s "$RUNNER_TEMP/remote-only.txt" ]; then
+            echo 'Remote-only migration versions remain; refusing any history repair/apply path.' >&2
+            exit 1
+          fi
+
+          echo 'Final history boundary PASSED: no remote-only versions; exactly three expected local-only versions remain.'
+          echo 'No database mutation performed.'
