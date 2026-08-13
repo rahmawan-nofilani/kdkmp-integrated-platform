@@ -1,0 +1,109 @@
+name: Logistics Anon Hardening Generator Proof
+
+on:
+  push:
+    branches:
+      - agent/logistics-anon-grant-hardening
+    paths:
+      - 'database/drafts/logistics_anon_select_hardening.sql'
+      - '.github/workflows/logistics-anon-hardening-generator-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: logistics-anon-hardening-generator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prove_generator:
+    name: generate reviewed logistics hardening migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      MIGRATION_NAME: logistics_anon_select_hardening
+      REVIEWED_DRAFT: database/drafts/logistics_anon_select_hardening.sql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL" = "$SUPABASE_CLI_VERSION"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration new --help >/dev/null
+          echo "Using pinned Supabase CLI $ACTUAL"
+
+      - name: Validate reviewed draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$REVIEWED_DRAFT"
+          grep -q '^-- LOGISTICS ANON SELECT HARDENING REVIEW DRAFT ONLY$' "$REVIEWED_DRAFT"
+          grep -q '^revoke select on$' "$REVIEWED_DRAFT"
+          grep -q '^from anon;$' "$REVIEWED_DRAFT"
+
+          if grep -Eiq '\b(drop|truncate|delete[[:space:]]+from|insert[[:space:]]+into|update[[:space:]])\b' "$REVIEWED_DRAFT"; then
+            echo 'Unexpected DDL/DML token found in privilege-only hardening draft.' >&2
+            exit 1
+          fi
+
+          REVOKED_TABLES="$(grep -E '^  public\.[a-z0-9_]+[,]?$' "$REVIEWED_DRAFT" | wc -l | tr -d ' ')"
+          test "$REVOKED_TABLES" -eq 10
+          sha256sum "$REVIEWED_DRAFT"
+
+      - name: Generate migration in isolated Supabase workspace
+        id: generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$RUNNER_TEMP/logistics-hardening-generator"
+          ARTIFACT_DIR="$RUNNER_TEMP/logistics-hardening-generator-artifact"
+          rm -rf "$WORKDIR" "$ARTIFACT_DIR"
+          mkdir -p "$WORKDIR" "$ARTIFACT_DIR"
+
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration new "$MIGRATION_NAME" \
+            < "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" \
+            | tee "$RUNNER_TEMP/logistics-hardening-generator.log"
+
+          mapfile -t FILES < <(find supabase/migrations -maxdepth 1 -type f -name "*_${MIGRATION_NAME}.sql" -print | sort)
+          test "${#FILES[@]}" -eq 1
+
+          GENERATED="${FILES[0]}"
+          BASENAME="$(basename "$GENERATED")"
+          [[ "$BASENAME" =~ ^[0-9]{14}_logistics_anon_select_hardening\.sql$ ]]
+          cmp -s "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" "$GENERATED"
+
+          DRAFT_SHA="$(sha256sum "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" | awk '{print $1}')"
+          GENERATED_SHA="$(sha256sum "$GENERATED" | awk '{print $1}')"
+          test "$DRAFT_SHA" = "$GENERATED_SHA"
+
+          cp "$GENERATED" "$ARTIFACT_DIR/$BASENAME"
+          cp "$RUNNER_TEMP/logistics-hardening-generator.log" "$ARTIFACT_DIR/generator.log"
+          jq -n \
+            --arg cli "$SUPABASE_CLI_VERSION" \
+            --arg basename "$BASENAME" \
+            --arg sha "$DRAFT_SHA" \
+            --arg commit "$GITHUB_SHA" \
+            '{supabase_cli_version:$cli,generated_basename:$basename,sha256:$sha,source_commit:$commit,content_matches_reviewed_draft:true,remote_database_touched:false}' \
+            > "$ARTIFACT_DIR/manifest.json"
+
+          echo "basename=$BASENAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$DRAFT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Generated migration: $BASENAME"
+          echo "SHA-256: $DRAFT_SHA"
+
+      - name: Upload one-day generator evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: logistics-anon-hardening-generator-${{ github.run_id }}
+          path: ${{ runner.temp }}/logistics-hardening-generator-artifact
+          if-no-files-found: error
+          retention-days: 1
