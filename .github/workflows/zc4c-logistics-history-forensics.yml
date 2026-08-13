@@ -46,7 +46,6 @@ jobs:
           set -euo pipefail
           test -s "$HISTORICAL_DEMO_BOOTSTRAP"
           grep -q '^-- DEVELOPMENT / DEMO DATA ONLY$' "$HISTORICAL_DEMO_BOOTSTRAP"
-
           WORKDIR="$RUNNER_TEMP/zc4c-logistics-forensics"
           rm -rf "$WORKDIR"
           mkdir -p "$WORKDIR"
@@ -54,8 +53,7 @@ jobs:
           npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
           mkdir -p supabase/migrations
           cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
-          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" \
-            "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
+          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
           echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
 
       - name: Replay repository in disposable local Supabase
@@ -71,101 +69,23 @@ jobs:
           set -euo pipefail
           OUT="$RUNNER_TEMP/logistics-fingerprint"
           mkdir -p "$OUT/local" "$OUT/remote"
-
           TABLES="'fleet_vehicles','logistics_route_trips','logistics_shipments','logistics_route_trip_stops','logistics_delivery_events','logistics_pod_evidence','logistics_delivery_exceptions','fleet_odometer_entries','fleet_maintenance_records','logistics_status_transition_rules'"
 
           fingerprint_db() {
             local db_url="$1"
             local target="$2"
 
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/columns.tsv"
-select table_name,ordinal_position,column_name,data_type,coalesce(udt_schema,''),udt_name,is_nullable,coalesce(column_default,'')
-from information_schema.columns
-where table_schema='public' and table_name in ($TABLES)
-order by table_name,ordinal_position;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/constraints.tsv"
-select c.relname,con.conname,con.contype,pg_get_constraintdef(con.oid,true)
-from pg_constraint con
-join pg_class c on c.oid=con.conrelid
-join pg_namespace n on n.oid=c.relnamespace
-where n.nspname='public' and c.relname in ($TABLES)
-order by c.relname,con.conname;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/indexes.tsv"
-select tablename,indexname,indexdef
-from pg_indexes
-where schemaname='public' and tablename in ($TABLES)
-order by tablename,indexname;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/rls.tsv"
-select c.relname,c.relrowsecurity,c.relforcerowsecurity
-from pg_class c
-join pg_namespace n on n.oid=c.relnamespace
-where n.nspname='public' and c.relname in ($TABLES) and c.relkind='r'
-order by c.relname;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/policies.tsv"
-select tablename,policyname,cmd,coalesce(array_to_string(roles,','),''),coalesce(qual,''),coalesce(with_check,'')
-from pg_policies
-where schemaname='public' and tablename in ($TABLES)
-order by tablename,policyname;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/grants.tsv"
-select table_name,grantee,privilege_type
-from information_schema.role_table_grants
-where table_schema='public'
-  and table_name in ($TABLES)
-  and grantee in ('anon','authenticated')
-order by table_name,grantee,privilege_type;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<SQL > "$target/triggers.tsv"
-select c.relname,t.tgname,pg_get_triggerdef(t.oid,true)
-from pg_trigger t
-join pg_class c on c.oid=t.tgrelid
-join pg_namespace n on n.oid=c.relnamespace
-where not t.tgisinternal and n.nspname='public' and c.relname in ($TABLES)
-order by c.relname,t.tgname;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<'SQL' > "$target/functions.tsv"
-select n.nspname,p.proname,pg_get_function_identity_arguments(p.oid),pg_get_functiondef(p.oid)
-from pg_proc p
-join pg_namespace n on n.oid=p.pronamespace
-where (n.nspname,p.proname) in (
-  ('app_private','prevent_logistics_event_mutation'),
-  ('app_private','protect_finalized_pod')
-)
-order by n.nspname,p.proname,pg_get_function_identity_arguments(p.oid);
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<'SQL' > "$target/permissions.tsv"
-select code,domain,description,is_privileged
-from public.permissions
-where code in ('LOGISTICS_VIEW','LOGISTICS_PLAN','LOGISTICS_DISPATCH','DELIVERY_ASSIGNED_VIEW','POD_CAPTURE','POD_REVIEW','FLEET_VIEW','FLEET_MANAGE')
-order by code;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<'SQL' > "$target/role_permissions.tsv"
-select r.code,p.code
-from public.role_permissions rp
-join public.roles r on r.id=rp.role_id
-join public.permissions p on p.id=rp.permission_id
-where p.code in ('LOGISTICS_VIEW','LOGISTICS_PLAN','LOGISTICS_DISPATCH','DELIVERY_ASSIGNED_VIEW','POD_CAPTURE','POD_REVIEW','FLEET_VIEW','FLEET_MANAGE')
-order by r.code,p.code;
-SQL
-
-            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<'SQL' > "$target/transition_rules.tsv"
-select from_status,to_status,requires_pod,requires_exception_resolution,status
-from public.logistics_status_transition_rules
-order by from_status,to_status;
-SQL
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,ordinal_position,column_name,data_type,coalesce(udt_schema,''),udt_name,is_nullable,coalesce(column_default,'') from information_schema.columns where table_schema='public' and table_name in ($TABLES) order by table_name,ordinal_position" > "$target/columns.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select c.relname,con.conname,con.contype,md5(pg_get_constraintdef(con.oid,true)) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ($TABLES) order by c.relname,con.conname" > "$target/constraints.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,indexname,md5(indexdef) from pg_indexes where schemaname='public' and tablename in ($TABLES) order by tablename,indexname" > "$target/indexes.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select c.relname,c.relrowsecurity,c.relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ($TABLES) and c.relkind='r' order by c.relname" > "$target/rls.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select tablename,policyname,cmd,coalesce(array_to_string(roles,','),''),md5(coalesce(qual,'')),md5(coalesce(with_check,'')) from pg_policies where schemaname='public' and tablename in ($TABLES) order by tablename,policyname" > "$target/policies.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select table_name,grantee,privilege_type from information_schema.role_table_grants where table_schema='public' and table_name in ($TABLES) and grantee in ('anon','authenticated') order by table_name,grantee,privilege_type" > "$target/grants.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select c.relname,t.tgname,md5(pg_get_triggerdef(t.oid,true)) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where not t.tgisinternal and n.nspname='public' and c.relname in ($TABLES) order by c.relname,t.tgname" > "$target/triggers.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select n.nspname,p.proname,pg_get_function_identity_arguments(p.oid),md5(pg_get_functiondef(p.oid)) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where (n.nspname,p.proname) in (('app_private','prevent_logistics_event_mutation'),('app_private','protect_finalized_pod')) order by n.nspname,p.proname,pg_get_function_identity_arguments(p.oid)" > "$target/functions.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select code,domain,description,is_privileged from public.permissions where code in ('LOGISTICS_VIEW','LOGISTICS_PLAN','LOGISTICS_DISPATCH','DELIVERY_ASSIGNED_VIEW','POD_CAPTURE','POD_REVIEW','FLEET_VIEW','FLEET_MANAGE') order by code" > "$target/permissions.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select r.code,p.code from public.role_permissions rp join public.roles r on r.id=rp.role_id join public.permissions p on p.id=rp.permission_id where p.code in ('LOGISTICS_VIEW','LOGISTICS_PLAN','LOGISTICS_DISPATCH','DELIVERY_ASSIGNED_VIEW','POD_CAPTURE','POD_REVIEW','FLEET_VIEW','FLEET_MANAGE') order by r.code,p.code" > "$target/role_permissions.tsv"
+            psql "$db_url" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select from_status,to_status,requires_pod,requires_exception_resolution,status from public.logistics_status_transition_rules order by from_status,to_status" > "$target/transition_rules.tsv"
           }
 
           fingerprint_db "$LOCAL_DB_URL" "$OUT/local"
@@ -178,26 +98,13 @@ SQL
               exit 1
             fi
           done
-
           echo 'Canonical logistics schema fingerprint MATCHES DEVELOPMENT.'
 
       - name: Read DEVELOPMENT logistics row counts
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 <<'SQL'
-select 'fleet_vehicles',count(*) from public.fleet_vehicles
-union all select 'logistics_route_trips',count(*) from public.logistics_route_trips
-union all select 'logistics_shipments',count(*) from public.logistics_shipments
-union all select 'logistics_route_trip_stops',count(*) from public.logistics_route_trip_stops
-union all select 'logistics_delivery_events',count(*) from public.logistics_delivery_events
-union all select 'logistics_pod_evidence',count(*) from public.logistics_pod_evidence
-union all select 'logistics_delivery_exceptions',count(*) from public.logistics_delivery_exceptions
-union all select 'fleet_odometer_entries',count(*) from public.fleet_odometer_entries
-union all select 'fleet_maintenance_records',count(*) from public.fleet_maintenance_records
-union all select 'logistics_status_transition_rules',count(*) from public.logistics_status_transition_rules
-order by 1;
-SQL
+          psql "$SUPABASE_DB_URL" -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -c "select 'fleet_vehicles',count(*) from public.fleet_vehicles union all select 'logistics_route_trips',count(*) from public.logistics_route_trips union all select 'logistics_shipments',count(*) from public.logistics_shipments union all select 'logistics_route_trip_stops',count(*) from public.logistics_route_trip_stops union all select 'logistics_delivery_events',count(*) from public.logistics_delivery_events union all select 'logistics_pod_evidence',count(*) from public.logistics_pod_evidence union all select 'logistics_delivery_exceptions',count(*) from public.logistics_delivery_exceptions union all select 'fleet_odometer_entries',count(*) from public.fleet_odometer_entries union all select 'fleet_maintenance_records',count(*) from public.fleet_maintenance_records union all select 'logistics_status_transition_rules',count(*) from public.logistics_status_transition_rules order by 1"
           echo 'DEVELOPMENT row counts read only; no mutations performed.'
 
       - name: Stop disposable local Supabase
