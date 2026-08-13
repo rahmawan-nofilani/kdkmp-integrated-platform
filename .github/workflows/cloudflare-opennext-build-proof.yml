@@ -6,8 +6,10 @@ on:
       - main
     paths:
       - 'scripts/cloudflare/zc5a-compatibility-scan.sh'
+      - 'scripts/cloudflare/zc5b-local-runtime-check.sh'
       - '.github/workflows/cloudflare-opennext-build-proof.yml'
       - 'docs/operations/zc5a-cloudflare-compatibility-assessment.md'
+      - 'docs/operations/zc5b-local-workers-runtime-rehearsal.md'
       - 'src/**'
       - 'next.config.ts'
       - 'package.json'
@@ -23,7 +25,7 @@ concurrency:
 
 jobs:
   build_proof:
-    name: OpenNext build + Wrangler dry-run
+    name: OpenNext build + Wrangler dry-run + local workerd
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -31,6 +33,8 @@ jobs:
       CLOUDFLARE_TELEMETRY_DISABLED: '1'
       ZC5A_OPENNEXT_VERSION: '1.20.2'
       ZC5A_WRANGLER_VERSION: '4.94.0'
+      NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321'
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'zc5b-local-placeholder'
 
     steps:
       - name: Checkout
@@ -77,9 +81,9 @@ jobs:
           cat > wrangler.jsonc <<'EOF'
           {
             "$schema": "./node_modules/wrangler/config-schema.json",
-            "name": "kdkmp-zc5a-build-proof",
+            "name": "kdkmp-zc5-local-proof",
             "main": ".open-next/worker.js",
-            "compatibility_date": "2026-08-13",
+            "compatibility_date": "2026-05-28",
             "compatibility_flags": ["nodejs_compat"],
             "assets": {
               "directory": ".open-next/assets",
@@ -88,10 +92,12 @@ jobs:
           }
           EOF
 
-          if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects' wrangler.jsonc; then
-            echo 'Persistent Cloudflare binding detected in ZC-5A proof config.' >&2
+          grep -Fq '"compatibility_date": "2026-05-28"' wrangler.jsonc
+          if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects|remote[[:space:]]*:[[:space:]]*true' wrangler.jsonc; then
+            echo 'Persistent or remote Cloudflare binding detected in proof config.' >&2
             exit 1
           fi
+          echo 'local_compatibility_date=2026-05-28'
 
       - name: Create disposable Edge middleware compatibility bridge
         shell: bash
@@ -102,7 +108,6 @@ jobs:
           cp src/proxy.ts /tmp/zc5a-proxy.ts.original
           python - <<'PY'
           from pathlib import Path
-
           src = Path('src/proxy.ts').read_text()
           needle = 'export async function proxy(request: NextRequest)'
           replacement = 'export async function middleware(request: NextRequest)'
@@ -132,7 +137,10 @@ jobs:
         run: |
           set -euo pipefail
           rm -f src/middleware.ts
-          cp /tmp/zc5a-proxy.ts.original src/proxy.ts
+          if [ -f /tmp/zc5a-proxy.ts.original ]; then
+            cp /tmp/zc5a-proxy.ts.original src/proxy.ts
+          fi
+          test -s src/proxy.ts
           test -z "$(git status --porcelain -- src)"
           echo 'tracked_source_restored=true'
 
@@ -147,7 +155,6 @@ jobs:
           python - <<'PY'
           import re
           from pathlib import Path
-
           text = Path('/tmp/zc5a-wrangler-dry-run.log').read_text(errors='replace')
           matches = re.findall(r'gzip:\s*([0-9]+(?:\.[0-9]+)?)\s*KiB', text, flags=re.I)
           if not matches:
@@ -158,6 +165,12 @@ jobs:
               if size >= 3072:
                   raise SystemExit(f'Compressed Worker size {size:.2f} KiB exceeds the 3 MiB Free-plan budget.')
           PY
+
+      - name: Exercise local Workers runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/cloudflare/zc5b-local-runtime-check.sh
 
       - name: Confirm repository and remote safety boundaries
         if: always()
@@ -171,4 +184,4 @@ jobs:
           echo 'cloudflare_storage_touched=false'
           echo 'deployment_attempted=false'
           echo 'secrets_consumed=false'
-          echo 'ZC-5A proof used only a disposable runner-side Edge middleware bridge.'
+          echo 'local_workerd_rehearsal_only=true'
