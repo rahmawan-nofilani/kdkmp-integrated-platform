@@ -127,7 +127,7 @@ as $$
     where n.id=p_organization_node_id
       and n.organization_id=p_organization_id
 
-    union all
+    union
 
     select parent.id,parent.parent_id,parent.organization_id
     from public.organization_nodes parent
@@ -225,15 +225,22 @@ before insert or update of organization_id,organization_node_id
 on public.system_archive_runs
 for each row execute function app_private.guard_system_archive_run_scope();
 
--- Archive state machine. RECOVERY_VERIFIED is terminal in this phase.
--- ELIGIBLE_FOR_PRUNE exists in the model but is deliberately unreachable until
--- a future owner-authorized migration adds legal/audit hold controls and unlocks it.
+-- Archive state machine. Every row must start at REQUESTED. RECOVERY_VERIFIED is
+-- terminal in this phase. ELIGIBLE_FOR_PRUNE exists in the model but is deliberately
+-- unreachable until a future owner-authorized migration adds hold controls.
 create or replace function app_private.guard_system_archive_run_transition()
 returns trigger
 language plpgsql
 set search_path=''
 as $$
 begin
+  if tg_op='INSERT' then
+    if new.status<>'REQUESTED' then
+      raise exception 'archive_run_must_start_requested';
+    end if;
+    return new;
+  end if;
+
   if old.status in ('RECOVERY_VERIFIED','ELIGIBLE_FOR_PRUNE','FAILED','CANCELLED')
      and new is distinct from old then
     if old.status='RECOVERY_VERIFIED' and new.status='ELIGIBLE_FOR_PRUNE' then
@@ -311,7 +318,7 @@ revoke all on function app_private.guard_system_archive_run_transition()
   from public,anon,authenticated;
 
 create trigger trg_guard_system_archive_run_transition
-before update on public.system_archive_runs
+before insert or update on public.system_archive_runs
 for each row execute function app_private.guard_system_archive_run_transition();
 
 create or replace function app_private.guard_system_archive_recovery_test_transition()
@@ -320,6 +327,13 @@ language plpgsql
 set search_path=''
 as $$
 begin
+  if tg_op='INSERT' then
+    if new.status<>'REQUESTED' then
+      raise exception 'archive_recovery_test_must_start_requested';
+    end if;
+    return new;
+  end if;
+
   if old.status in ('PASSED','FAILED','CANCELLED')
      and new is distinct from old then
     raise exception 'terminal_archive_recovery_test_is_immutable';
@@ -357,5 +371,5 @@ revoke all on function app_private.guard_system_archive_recovery_test_transition
   from public,anon,authenticated;
 
 create trigger trg_guard_system_archive_recovery_test_transition
-before update on public.system_archive_recovery_tests
+before insert or update on public.system_archive_recovery_tests
 for each row execute function app_private.guard_system_archive_recovery_test_transition();
