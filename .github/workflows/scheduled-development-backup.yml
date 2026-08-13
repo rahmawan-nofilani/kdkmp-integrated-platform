@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Dispatch Manual Backup & Restore Drill on main
+      - name: Dispatch DAILY Backup & Restore Drill on main
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,7 +39,7 @@ jobs:
             --header "Authorization: Bearer ${GH_TOKEN}" \
             --header 'X-GitHub-Api-Version: 2026-03-10' \
             "$API_URL" \
-            --data '{"ref":"main"}')"
+            --data '{"ref":"main","inputs":{"retention_class":"DAILY"}}')"
 
           if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "204" ]; then
             echo "Backup workflow dispatch failed with HTTP status $HTTP_STATUS." >&2
@@ -51,7 +51,7 @@ jobs:
 
           if [ -s "$RESPONSE_FILE" ] && jq -e '.workflow_run_id? != null' "$RESPONSE_FILE" >/dev/null 2>&1; then
             RUN_ID="$(jq -r '.workflow_run_id' "$RESPONSE_FILE")"
-            echo "Dispatched verified backup workflow run ID $RUN_ID on main."
+            echo "Dispatched DAILY verified backup workflow run ID $RUN_ID on main."
           else
-            echo "Dispatched verified backup workflow on main."
+            echo "Dispatched DAILY verified backup workflow on main."
           fi

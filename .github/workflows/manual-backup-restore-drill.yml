@@ -2,6 +2,17 @@ name: Manual Backup & Restore Drill
 
 on:
   workflow_dispatch:
+    inputs:
+      retention_class:
+        description: Retention class recorded in the backup registry
+        required: false
+        default: MANUAL
+        type: choice
+        options:
+          - MANUAL
+          - DAILY
+          - WEEKLY
+          - MONTHLY
 
 permissions:
   contents: read
@@ -19,6 +30,7 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       BACKUP_ENCRYPTION_PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
       SUPABASE_CLI_VERSION: "2.113.0"
+      BACKUP_RETENTION_CLASS: ${{ inputs.retention_class || 'MANUAL' }}
 
     steps:
       - name: Checkout
@@ -34,6 +46,19 @@ jobs:
             exit 1
           fi
           echo "Using pinned Supabase CLI $ACTUAL_VERSION"
+
+      - name: Validate retention class
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BACKUP_RETENTION_CLASS" in
+            MANUAL|DAILY|WEEKLY|MONTHLY) ;;
+            *)
+              echo "Unsupported backup retention class: $BACKUP_RETENTION_CLASS" >&2
+              exit 1
+              ;;
+          esac
+          echo "Backup retention class: $BACKUP_RETENTION_CLASS"
 
       - name: Validate required secrets and database URL shape
         shell: bash
@@ -110,7 +135,7 @@ jobs:
           set -euo pipefail
           STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
           RUN_NUMBER="BKP-${STAMP}-${GITHUB_RUN_ID}"
-          BACKUP_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','MANUAL','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA','supabase_cli_version','$SUPABASE_CLI_VERSION')) returning id;")"
+          BACKUP_ID="$(docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -qAt -v ON_ERROR_STOP=1 -c "insert into public.system_backup_runs(backup_run_number,backup_type,retention_class,status,storage_provider,encrypted,source,manifest) values ('$RUN_NUMBER','MANUAL_LOGICAL','$BACKUP_RETENTION_CLASS','REQUESTED','GITHUB_ARTIFACT',true,'GITHUB_ACTIONS',jsonb_build_object('github_run_id','$GITHUB_RUN_ID','github_sha','$GITHUB_SHA','supabase_cli_version','$SUPABASE_CLI_VERSION','retention_class','$BACKUP_RETENTION_CLASS')) returning id;")"
           printf '%s' "$BACKUP_ID" > "$RUNNER_TEMP/backup-run-id.txt"
           docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='RUNNING' where id='$BACKUP_ID';"
           echo "backup_id=$BACKUP_ID" >> "$GITHUB_OUTPUT"
@@ -428,11 +453,12 @@ jobs:
             --arg github_run_id "$GITHUB_RUN_ID" \
             --arg github_sha "$GITHUB_SHA" \
             --arg supabase_cli_version "$SUPABASE_CLI_VERSION" \
+            --arg retention_class "$BACKUP_RETENTION_CLASS" \
             --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg source_counts "$(jq -c . "$BACKUP_DIR/source_counts.json")" \
             --arg restored_counts "$(jq -c . "$BACKUP_DIR/restored_counts.json")" \
             --arg role_sanitization "$(jq -c . "$BACKUP_DIR/restore_sanitization.json")" \
-            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,supabase_cli_version:$supabase_cli_version,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson),role_sanitization:($role_sanitization|fromjson)}' \
+            '{backup_run_number:$backup_run_number,github_run_id:$github_run_id,github_sha:$github_sha,supabase_cli_version:$supabase_cli_version,retention_class:$retention_class,created_at:$created_at,encrypted:true,restore_test:"PASSED",source_counts:($source_counts|fromjson),restored_counts:($restored_counts|fromjson),role_sanitization:($role_sanitization|fromjson)}' \
             > "$BACKUP_DIR/manifest.json"
 
           TAR_PATH="$PACKAGE_DIR/kdkmp-development-$STAMP.tar.gz"
@@ -543,19 +569,21 @@ jobs:
               --arg github_run_id "$GITHUB_RUN_ID" \
               --arg github_sha "$GITHUB_SHA" \
               --arg supabase_cli_version "$SUPABASE_CLI_VERSION" \
+              --arg retention_class "$BACKUP_RETENTION_CLASS" \
               '.encrypted == true and
                .restore_test == "PASSED" and
                .backup_run_number == $backup_run_number and
                .github_run_id == $github_run_id and
                .github_sha == $github_sha and
                .supabase_cli_version == $supabase_cli_version and
+               .retention_class == $retention_class and
                .source_counts == .restored_counts' \
               manifest.json > /dev/null
           )
 
           VERIFIED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "verified_at=$VERIFIED_AT" >> "$GITHUB_OUTPUT"
-          echo "Encrypted artifact read-back, checksum, decryption, inner checksums, and manifest verification passed."
+          echo "Encrypted artifact read-back, checksum, decryption, inner checksums, manifest retention class, and manifest verification passed."
 
       - name: Mark backup verified
         shell: bash
@@ -563,7 +591,7 @@ jobs:
           set -euo pipefail
           BACKUP_ID="${{ steps.registry.outputs.backup_id }}"
           READBACK_AT="${{ steps.readback.outputs.verified_at }}"
-          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED',manifest=manifest || jsonb_build_object('artifact_readback','PASSED','artifact_readback_verified_at','$READBACK_AT','supabase_cli_version','$SUPABASE_CLI_VERSION') where id='$BACKUP_ID';"
+          docker run --rm postgres:17-alpine psql --dbname="$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "update public.system_backup_runs set status='VERIFIED',manifest=manifest || jsonb_build_object('artifact_readback','PASSED','artifact_readback_verified_at','$READBACK_AT','supabase_cli_version','$SUPABASE_CLI_VERSION','retention_class','$BACKUP_RETENTION_CLASS') where id='$BACKUP_ID';"
 
       - name: Mark registry failed when workflow fails
         if: failure()
