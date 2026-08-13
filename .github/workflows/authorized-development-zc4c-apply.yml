@@ -112,7 +112,8 @@ jobs:
             v_authenticated integer;
             v_archive_runs bigint;
             v_recovery_tests bigint;
-            v_function text;
+            v_run_function text;
+            v_recovery_function text;
           begin
             select count(*) into v_constraints
             from pg_constraint
@@ -123,12 +124,18 @@ jobs:
             end if;
 
             select pg_get_functiondef('app_private.guard_system_archive_run_transition()'::regprocedure)
-              into v_function;
-            if v_function not like '%archive_package_requires_positive_size%'
-               or v_function not like '%archive_package_requires_object_key%'
-               or v_function not like '%archive_recovery_verification_required%'
-               or v_function not like '%archive_prune_state_not_implemented%' then
-              raise exception 'zc4c_guard_contract_missing';
+              into v_run_function;
+            if v_run_function not like '%archive_package_requires_positive_size%'
+               or v_run_function not like '%written_archive_requires_destination_identity%'
+               or v_run_function not like '%archive_recovery_verified_requires_passed_test%'
+               or v_run_function not like '%archive_prune_eligibility_not_activated%' then
+              raise exception 'zc4c_archive_run_guard_contract_missing';
+            end if;
+
+            select pg_get_functiondef('app_private.guard_system_archive_recovery_test_transition()'::regprocedure)
+              into v_recovery_function;
+            if v_recovery_function not like '%archive_recovery_passed_requires_evidence%' then
+              raise exception 'zc4c_archive_recovery_guard_contract_missing';
             end if;
 
             select count(*) into v_anon
@@ -275,7 +282,7 @@ jobs:
           sha256sum "$RUNNER_TEMP/archive-access-before.tsv" | awk '{print $1}' > "$RUNNER_TEMP/archive-access-before.sha256"
           echo 'Preflight PASSED: exact two pending migrations and expected DEVELOPMENT baseline.'
 
-      - name: Dry-run exact two migration push
+      - name: Dry-run exact migration push and prove no write
         shell: bash
         run: |
           set -euo pipefail
@@ -287,14 +294,13 @@ jobs:
           mkdir -p supabase/migrations
           cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
 
-          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db push --dry-run --db-url "$SUPABASE_DB_URL" 2>&1 | tee "$RUNNER_TEMP/db-push-dry-run.txt"
-          grep -Fq "${MIGRATION_1_VERSION}_${MIGRATION_1_NAME}.sql" "$RUNNER_TEMP/db-push-dry-run.txt"
-          grep -Fq "${MIGRATION_2_VERSION}_${MIGRATION_2_NAME}.sql" "$RUNNER_TEMP/db-push-dry-run.txt"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db push --dry-run --db-url "$SUPABASE_DB_URL"
 
-          grep -oE '[0-9]{14}_[a-z0-9_]+\.sql' "$RUNNER_TEMP/db-push-dry-run.txt" | sort -u > "$RUNNER_TEMP/dry-run-migration-files.txt"
-          printf '%s\n' "${MIGRATION_1_VERSION}_${MIGRATION_1_NAME}.sql" "${MIGRATION_2_VERSION}_${MIGRATION_2_NAME}.sql" > "$RUNNER_TEMP/expected-dry-run-migration-files.txt"
-          diff -u "$RUNNER_TEMP/expected-dry-run-migration-files.txt" "$RUNNER_TEMP/dry-run-migration-files.txt"
-          echo 'Dry-run PASSED: Supabase CLI would push exactly two authorized migrations.'
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select version from supabase_migrations.schema_migrations order by version" | sed '/^[[:space:]]*$/d' | sort -u > "$RUNNER_TEMP/remote-versions-after-dry-run.txt"
+          diff -u "$RUNNER_TEMP/remote-versions.txt" "$RUNNER_TEMP/remote-versions-after-dry-run.txt"
+          DRY_RUN_TARGET_COUNT="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version in ('$MIGRATION_1_VERSION','$MIGRATION_2_VERSION')" | tr -d '[:space:]')"
+          test "$DRY_RUN_TARGET_COUNT" = '0'
+          echo 'Dry-run PASSED and migration history remained unchanged.'
 
       - name: Apply exact two authorized migrations
         shell: bash
@@ -325,11 +331,14 @@ jobs:
           CONSTRAINT_COUNT="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select count(*) from pg_constraint where (conrelid='public.system_archive_runs'::regclass and conname in ('system_archive_runs_size_bytes_positive','system_archive_runs_object_key_nonblank')) or (conrelid='public.system_archive_recovery_tests'::regclass and conname='system_archive_recovery_tests_passed_evidence')" | tr -d '[:space:]')"
           test "$CONSTRAINT_COUNT" = '3'
 
-          FUNCTION_DEF="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select pg_get_functiondef('app_private.guard_system_archive_run_transition()'::regprocedure)")"
-          printf '%s' "$FUNCTION_DEF" | grep -Fq 'archive_package_requires_positive_size'
-          printf '%s' "$FUNCTION_DEF" | grep -Fq 'archive_package_requires_object_key'
-          printf '%s' "$FUNCTION_DEF" | grep -Fq 'archive_recovery_verification_required'
-          printf '%s' "$FUNCTION_DEF" | grep -Fq 'archive_prune_state_not_implemented'
+          RUN_FUNCTION_DEF="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select pg_get_functiondef('app_private.guard_system_archive_run_transition()'::regprocedure)")"
+          printf '%s' "$RUN_FUNCTION_DEF" | grep -Fq 'archive_package_requires_positive_size'
+          printf '%s' "$RUN_FUNCTION_DEF" | grep -Fq 'written_archive_requires_destination_identity'
+          printf '%s' "$RUN_FUNCTION_DEF" | grep -Fq 'archive_recovery_verified_requires_passed_test'
+          printf '%s' "$RUN_FUNCTION_DEF" | grep -Fq 'archive_prune_eligibility_not_activated'
+
+          RECOVERY_FUNCTION_DEF="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "select pg_get_functiondef('app_private.guard_system_archive_recovery_test_transition()'::regprocedure)")"
+          printf '%s' "$RECOVERY_FUNCTION_DEF" | grep -Fq 'archive_recovery_passed_requires_evidence'
 
           ARCHIVE_RUNS="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'select count(*) from public.system_archive_runs' | tr -d '[:space:]')"
           ARCHIVE_RECOVERY="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'select count(*) from public.system_archive_recovery_tests' | tr -d '[:space:]')"
@@ -375,6 +384,6 @@ jobs:
           echo "Controlled DEVELOPMENT apply VERIFIED: $MIGRATION_1_VERSION + $MIGRATION_2_VERSION"
           echo "Logistics unaffected-schema/data fingerprint unchanged: $AFTER_LOGISTICS_SHA"
           echo "Archive RLS/grant fingerprint unchanged: $AFTER_ARCHIVE_ACCESS_SHA"
-          echo 'Expected changes verified: 3 ZC-4C constraints active; archive guard hardened; anon logistics SELECT 10 -> 0.'
+          echo 'Expected changes verified: 3 ZC-4C constraints active; archive guards hardened; anon logistics SELECT 10 -> 0.'
           echo 'No pending or remote-only migration versions remain.'
           echo 'No seed, roles, reset, migration repair, business-data mutation, delete/prune/purge, archive writer, R2, or paid storage action occurred.'
