@@ -33,7 +33,6 @@ jobs:
       CLOUDFLARE_TELEMETRY_DISABLED: '1'
       ZC5A_OPENNEXT_VERSION: '1.20.2'
       ZC5A_WRANGLER_VERSION: '4.94.0'
-      ZC5_LOCAL_COMPATIBILITY_DATE: '2026-05-28'
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321'
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'zc5b-local-placeholder'
 
@@ -79,12 +78,12 @@ jobs:
           export default defineCloudflareConfig();
           EOF
 
-          cat > wrangler.jsonc <<EOF
+          cat > wrangler.jsonc <<'EOF'
           {
             "$schema": "./node_modules/wrangler/config-schema.json",
             "name": "kdkmp-zc5-local-proof",
             "main": ".open-next/worker.js",
-            "compatibility_date": "${ZC5_LOCAL_COMPATIBILITY_DATE}",
+            "compatibility_date": "2026-05-28",
             "compatibility_flags": ["nodejs_compat"],
             "assets": {
               "directory": ".open-next/assets",
@@ -98,7 +97,7 @@ jobs:
             echo 'Persistent or remote Cloudflare binding detected in proof config.' >&2
             exit 1
           fi
-          echo "local_compatibility_date=${ZC5_LOCAL_COMPATIBILITY_DATE}"
+          echo 'local_compatibility_date=2026-05-28'
 
       - name: Create disposable Edge middleware compatibility bridge
         shell: bash
@@ -138,7 +137,10 @@ jobs:
         run: |
           set -euo pipefail
           rm -f src/middleware.ts
-          cp /tmp/zc5a-proxy.ts.original src/proxy.ts
+          if [ -f /tmp/zc5a-proxy.ts.original ]; then
+            cp /tmp/zc5a-proxy.ts.original src/proxy.ts
+          fi
+          test -s src/proxy.ts
           test -z "$(git status --porcelain -- src)"
           echo 'tracked_source_restored=true'
 
