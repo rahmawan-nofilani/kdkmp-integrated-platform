@@ -1,0 +1,138 @@
+name: Cloudflare OpenNext Build Proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/cloudflare/zc5a-compatibility-scan.sh'
+      - '.github/workflows/cloudflare-opennext-build-proof.yml'
+      - 'docs/operations/zc5a-cloudflare-compatibility-assessment.md'
+      - 'src/**'
+      - 'next.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-opennext-build-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build_proof:
+    name: OpenNext build + Wrangler dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      CLOUDFLARE_TELEMETRY_DISABLED: '1'
+      ZC5A_OPENNEXT_VERSION: '1.20.2'
+      ZC5A_WRANGLER_VERSION: '4.94.0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Static compatibility scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/cloudflare/zc5a-compatibility-scan.sh
+
+      - name: Install pinned adapter in runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp package.json /tmp/package.json.before-zc5a
+          cp package-lock.json /tmp/package-lock.json.before-zc5a
+          npm install --no-save --package-lock=false \
+            "@opennextjs/cloudflare@${ZC5A_OPENNEXT_VERSION}" \
+            "wrangler@${ZC5A_WRANGLER_VERSION}"
+          cmp package.json /tmp/package.json.before-zc5a
+          cmp package-lock.json /tmp/package-lock.json.before-zc5a
+          npx --no-install opennextjs-cloudflare --version || true
+          npx --no-install wrangler --version
+
+      - name: Create temporary zero-binding Cloudflare config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > open-next.config.ts <<'EOF'
+          import { defineCloudflareConfig } from "@opennextjs/cloudflare";
+          export default defineCloudflareConfig();
+          EOF
+
+          cat > wrangler.jsonc <<'EOF'
+          {
+            "$schema": "./node_modules/wrangler/config-schema.json",
+            "name": "kdkmp-zc5a-build-proof",
+            "main": ".open-next/worker.js",
+            "compatibility_date": "2026-08-13",
+            "compatibility_flags": ["nodejs_compat"],
+            "assets": {
+              "directory": ".open-next/assets",
+              "binding": "ASSETS"
+            }
+          }
+          EOF
+
+          if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects' wrangler.jsonc; then
+            echo 'Persistent Cloudflare binding detected in ZC-5A proof config.' >&2
+            exit 1
+          fi
+
+      - name: Build with OpenNext
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --no-install opennextjs-cloudflare build 2>&1 | tee /tmp/zc5a-opennext-build.log
+          test -s .open-next/worker.js
+          test -d .open-next/assets
+
+      - name: Wrangler bundle dry-run only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/zc5a-wrangler-out
+          npx --no-install wrangler deploy --dry-run --outdir /tmp/zc5a-wrangler-out 2>&1 | tee /tmp/zc5a-wrangler-dry-run.log
+          test -d /tmp/zc5a-wrangler-out
+
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path('/tmp/zc5a-wrangler-dry-run.log').read_text(errors='replace')
+          matches = re.findall(r'gzip:\s*([0-9]+(?:\.[0-9]+)?)\s*KiB', text, flags=re.I)
+          if not matches:
+              print('wrangler_gzip_size_kib=UNPARSED')
+          else:
+              size = float(matches[-1])
+              print(f'wrangler_gzip_size_kib={size:.2f}')
+              if size >= 3072:
+                  raise SystemExit(f'Compressed Worker size {size:.2f} KiB exceeds the 3 MiB Free-plan budget.')
+          PY
+
+      - name: Confirm repository and remote safety boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp package.json /tmp/package.json.before-zc5a
+          cmp package-lock.json /tmp/package-lock.json.before-zc5a
+          test -z "$(git status --porcelain -- package.json package-lock.json src)"
+          echo 'cloudflare_account_touched=false'
+          echo 'cloudflare_storage_touched=false'
+          echo 'deployment_attempted=false'
+          echo 'secrets_consumed=false'
+          echo 'ZC-5A build proof completed without a Cloudflare account or remote deployment.'
