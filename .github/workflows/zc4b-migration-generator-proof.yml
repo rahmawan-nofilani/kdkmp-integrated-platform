@@ -1,0 +1,155 @@
+name: ZC-4B Migration Generator Proof
+
+on:
+  push:
+    branches:
+      - agent/zc4b-migration-generator-proof
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zc4b-migration-generator-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prove_generator:
+    name: generate reviewed migration with pinned Supabase CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      MIGRATION_NAME: zc4b_archive_registry_foundation
+      REVIEWED_DRAFT: database/drafts/zc4b_archive_registry_foundation.sql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI and command discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          if [ "$ACTUAL_VERSION" != "$SUPABASE_CLI_VERSION" ]; then
+            echo "Pinned Supabase CLI version mismatch: expected $SUPABASE_CLI_VERSION, got $ACTUAL_VERSION" >&2
+            exit 1
+          fi
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration new --help >/dev/null
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init --help >/dev/null
+          echo "Using pinned Supabase CLI $ACTUAL_VERSION"
+
+      - name: Validate reviewed draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$REVIEWED_DRAFT"
+          grep -q '^-- ZC-4B REVIEW DRAFT ONLY$' "$REVIEWED_DRAFT"
+          grep -q 'THIS FILE IS NOT A SUPABASE MIGRATION' "$REVIEWED_DRAFT"
+          if grep -Eiq '\b(drop[[:space:]]+table|truncate[[:space:]]+table|delete[[:space:]]+from)\b' "$REVIEWED_DRAFT"; then
+            echo "Destructive SQL token found in reviewed draft; refusing generator proof." >&2
+            exit 1
+          fi
+          sha256sum "$REVIEWED_DRAFT"
+
+      - name: Generate migration in isolated standard Supabase workspace
+        id: generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$RUNNER_TEMP/zc4b-generator"
+          ARTIFACT_DIR="$RUNNER_TEMP/zc4b-generator-artifact"
+          rm -rf "$WORKDIR" "$ARTIFACT_DIR"
+          mkdir -p "$WORKDIR" "$ARTIFACT_DIR"
+
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration new "$MIGRATION_NAME" \
+            < "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" \
+            | tee "$RUNNER_TEMP/zc4b-generator.log"
+
+          mapfile -t GENERATED_FILES < <(
+            find "$WORKDIR/supabase/migrations" -maxdepth 1 -type f \
+              -name "*_${MIGRATION_NAME}.sql" -print | sort
+          )
+
+          if [ "${#GENERATED_FILES[@]}" -ne 1 ]; then
+            echo "Expected exactly one generated migration, found ${#GENERATED_FILES[@]}." >&2
+            exit 1
+          fi
+
+          GENERATED_FILE="${GENERATED_FILES[0]}"
+          GENERATED_BASENAME="$(basename "$GENERATED_FILE")"
+
+          if [[ ! "$GENERATED_BASENAME" =~ ^[0-9]{14}_zc4b_archive_registry_foundation\.sql$ ]]; then
+            echo "Unexpected migration filename from CLI: $GENERATED_BASENAME" >&2
+            exit 1
+          fi
+
+          if ! cmp -s "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" "$GENERATED_FILE"; then
+            echo "Generated migration content differs from the reviewed draft." >&2
+            exit 1
+          fi
+
+          DRAFT_SHA256="$(sha256sum "$GITHUB_WORKSPACE/$REVIEWED_DRAFT" | awk '{print $1}')"
+          GENERATED_SHA256="$(sha256sum "$GENERATED_FILE" | awk '{print $1}')"
+          if [ "$DRAFT_SHA256" != "$GENERATED_SHA256" ]; then
+            echo "Generated migration SHA-256 differs from reviewed draft." >&2
+            exit 1
+          fi
+
+          cp "$GENERATED_FILE" "$ARTIFACT_DIR/$GENERATED_BASENAME"
+          cp "$RUNNER_TEMP/zc4b-generator.log" "$ARTIFACT_DIR/generator.log"
+
+          jq -n \
+            --arg supabase_cli_version "$SUPABASE_CLI_VERSION" \
+            --arg migration_name "$MIGRATION_NAME" \
+            --arg generated_basename "$GENERATED_BASENAME" \
+            --arg draft_sha256 "$DRAFT_SHA256" \
+            --arg generated_sha256 "$GENERATED_SHA256" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg source_branch "$GITHUB_REF_NAME" \
+            --arg repository_target "database/migrations/$GENERATED_BASENAME" \
+            '{
+              supabase_cli_version: $supabase_cli_version,
+              migration_name: $migration_name,
+              generated_basename: $generated_basename,
+              draft_sha256: $draft_sha256,
+              generated_sha256: $generated_sha256,
+              source_commit: $source_commit,
+              source_branch: $source_branch,
+              repository_target: $repository_target,
+              content_matches_reviewed_draft: true,
+              remote_database_touched: false
+            }' > "$ARTIFACT_DIR/generator-manifest.json"
+
+          echo "migration_basename=$GENERATED_BASENAME" >> "$GITHUB_OUTPUT"
+          echo "draft_sha256=$DRAFT_SHA256" >> "$GITHUB_OUTPUT"
+          echo "Generated migration: $GENERATED_BASENAME"
+          echo "Target repository path: database/migrations/$GENERATED_BASENAME"
+
+      - name: Verify generator artifact manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR="$RUNNER_TEMP/zc4b-generator-artifact"
+          jq -e \
+            --arg expected_cli "$SUPABASE_CLI_VERSION" \
+            --arg expected_name "${{ steps.generator.outputs.migration_basename }}" \
+            --arg expected_sha "${{ steps.generator.outputs.draft_sha256 }}" \
+            '.supabase_cli_version == $expected_cli
+             and .generated_basename == $expected_name
+             and .draft_sha256 == $expected_sha
+             and .generated_sha256 == $expected_sha
+             and .content_matches_reviewed_draft == true
+             and .remote_database_touched == false' \
+            "$ARTIFACT_DIR/generator-manifest.json" >/dev/null
+
+      - name: Upload short-lived generator evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: zc4b-migration-generator-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/zc4b-generator-artifact
+          if-no-files-found: error
+          retention-days: 1
