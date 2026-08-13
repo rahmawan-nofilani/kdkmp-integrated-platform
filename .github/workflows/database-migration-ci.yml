@@ -1,14 +1,14 @@
 name: Database Migration CI
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/zc4b-archive-registry-activation
+      - main
     paths:
       - 'database/migrations/**'
       - 'database/seeds/001_development_demo_organization.sql'
       - '.github/workflows/database-migration-ci.yml'
-  pull_request:
+  push:
     branches:
       - main
     paths:
@@ -30,7 +30,7 @@ jobs:
     timeout-minutes: 35
     env:
       SUPABASE_CLI_VERSION: "2.113.0"
-      ZC4B_MIGRATION: database/migrations/20260813091951_zc4b_archive_registry_foundation.sql
+      ZC4B_MIGRATION: database/migrations/20260813094003_zc4b_archive_registry_foundation.sql
       ZC4B_EXPECTED_SHA256: 1acda9aca3096f1c547498de180cbb583c49d48a8278ee4ec6452cf3017a9c41
       HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
       HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
@@ -62,7 +62,7 @@ jobs:
 
           ACTUAL_SHA256="$(sha256sum "$ZC4B_MIGRATION" | awk '{print $1}')"
           if [ "$ACTUAL_SHA256" != "$ZC4B_EXPECTED_SHA256" ]; then
-            echo "ZC-4B migration does not match the CLI-generated reviewed artifact." >&2
+            echo "ZC-4B migration does not match the reviewed/generated SQL artifact." >&2
             echo "Expected: $ZC4B_EXPECTED_SHA256" >&2
             echo "Actual:   $ACTUAL_SHA256" >&2
             exit 1
@@ -87,17 +87,16 @@ jobs:
             exit 1
           fi
 
-          # Historical compatibility fixture only. An already-applied accounting
-          # migration assumes DEMO-KDKMP-DEV exists before its 20260811100623 run.
-          # The source seed is not promoted into database/migrations and this fixture
-          # exists only inside the disposable CI workspace.
+          # Historical compatibility fixture only. The already-applied accounting
+          # migration 20260811100623 assumes DEMO-KDKMP-DEV exists. The source seed
+          # remains under database/seeds and this fixture exists only in disposable CI.
           cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" \
             "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
 
           INVALID_NAMES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
             | grep -Ev '^[0-9]{14}_[a-z0-9_]+\.sql$' || true)"
           if [ -n "$INVALID_NAMES" ]; then
-            echo "Migration filenames outside the required timestamp_name.sql contract:" >&2
+            echo "Migration filenames outside timestamp_name.sql contract:" >&2
             printf '%s\n' "$INVALID_NAMES" >&2
             exit 1
           fi
@@ -111,8 +110,8 @@ jobs:
           fi
 
           TOTAL_REPLAY_FILES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
-          echo "Prepared $REPOSITORY_MIGRATION_COUNT repository migrations plus 1 explicitly documented historical CI bootstrap fixture ($TOTAL_REPLAY_FILES replay files total)."
-          echo "Historical defect: accounting migration 20260811100623 depends on DEMO bootstrap state that is stored separately under database/seeds."
+          echo "Prepared $REPOSITORY_MIGRATION_COUNT repository migrations plus 1 documented historical CI fixture ($TOTAL_REPLAY_FILES replay files total)."
+          echo "Historical defect remains explicit: accounting migration 20260811100623 depends on separately stored DEMO bootstrap state."
           echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
 
       - name: Start isolated Supabase database and replay every migration
@@ -126,7 +125,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           if command -v psql >/dev/null 2>&1; then
             PSQL=(psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
           else
@@ -144,8 +142,7 @@ jobs:
             end if;
 
             if not exists (
-              select 1
-              from pg_class c
+              select 1 from pg_class c
               join pg_namespace n on n.oid=c.relnamespace
               where n.nspname='public' and c.relname='system_archive_runs' and c.relrowsecurity
             ) then
@@ -153,8 +150,7 @@ jobs:
             end if;
 
             if not exists (
-              select 1
-              from pg_class c
+              select 1 from pg_class c
               join pg_namespace n on n.oid=c.relnamespace
               where n.nspname='public' and c.relname='system_archive_recovery_tests' and c.relrowsecurity
             ) then
@@ -233,7 +229,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           if command -v psql >/dev/null 2>&1; then
             PSQL=(psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1)
           else
@@ -286,9 +281,7 @@ jobs:
               if sqlerrm<>'invalid_archive_status_transition' then raise; end if;
             end;
 
-            update public.system_archive_runs
-            set status='SNAPSHOTTED'
-            where id=v_run;
+            update public.system_archive_runs set status='SNAPSHOTTED' where id=v_run;
 
             begin
               update public.system_archive_runs set status='PACKAGED' where id=v_run;
@@ -319,9 +312,7 @@ jobs:
             set status='WRITTEN', storage_provider='MANUAL_OFFSITE', object_key='ci/archive.enc'
             where id=v_run;
 
-            update public.system_archive_runs
-            set status='READBACK_VERIFIED'
-            where id=v_run;
+            update public.system_archive_runs set status='READBACK_VERIFIED' where id=v_run;
 
             begin
               update public.system_archive_runs set status='RECOVERY_VERIFIED' where id=v_run;
