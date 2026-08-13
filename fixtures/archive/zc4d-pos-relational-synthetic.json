@@ -1,0 +1,13 @@
+{
+  "fixture_version": "zc4d-pos-relational-synthetic-v1",
+  "cases": [
+    {"n":1,"amount":125000,"day":"2026-07-05","sale_status":"COMPLETED","sync_status":"SYNCED","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":true,"missing_inventory":false},
+    {"n":2,"amount":175000,"day":"2026-07-20","sale_status":"COMPLETED","sync_status":"SYNCED","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":true,"missing_inventory":false},
+    {"n":3,"amount":90000,"day":"2026-07-22","sale_status":"PAYMENT_PENDING","sync_status":"SYNCED","payment_status":"PENDING","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":true,"missing_inventory":false},
+    {"n":4,"amount":80000,"day":"2026-07-24","sale_status":"COMPLETED","sync_status":"PENDING","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":true,"missing_inventory":false},
+    {"n":5,"amount":70000,"day":"2026-08-02","sale_status":"COMPLETED","sync_status":"SYNCED","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"OPEN","reversal":false,"journal_balanced":true,"missing_inventory":false},
+    {"n":6,"amount":60000,"day":"2026-07-25","sale_status":"VOIDED","sync_status":"SYNCED","payment_status":"REFUNDED","inventory_status":"REVERSED","period_status":"HARD_CLOSED","reversal":true,"journal_balanced":true,"missing_inventory":false},
+    {"n":7,"amount":50000,"day":"2026-07-27","sale_status":"COMPLETED","sync_status":"SYNCED","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":false,"missing_inventory":false},
+    {"n":8,"amount":40000,"day":"2026-07-29","sale_status":"COMPLETED","sync_status":"SYNCED","payment_status":"SETTLED","inventory_status":"POSTED","period_status":"HARD_CLOSED","reversal":false,"journal_balanced":true,"missing_inventory":true}
+  ]
+}
