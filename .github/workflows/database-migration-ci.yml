@@ -6,12 +6,14 @@ on:
       - agent/zc4b-archive-registry-activation
     paths:
       - 'database/migrations/**'
+      - 'database/seeds/001_development_demo_organization.sql'
       - '.github/workflows/database-migration-ci.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'database/migrations/**'
+      - 'database/seeds/001_development_demo_organization.sql'
       - '.github/workflows/database-migration-ci.yml'
 
 permissions:
@@ -30,6 +32,8 @@ jobs:
       SUPABASE_CLI_VERSION: "2.113.0"
       ZC4B_MIGRATION: database/migrations/20260813091951_zc4b_archive_registry_foundation.sql
       ZC4B_EXPECTED_SHA256: 1acda9aca3096f1c547498de180cbb583c49d48a8278ee4ec6452cf3017a9c41
+      HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
+      HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
       LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
     steps:
@@ -54,12 +58,18 @@ jobs:
         run: |
           set -euo pipefail
           test -s "$ZC4B_MIGRATION"
+          test -s "$HISTORICAL_DEMO_BOOTSTRAP"
 
           ACTUAL_SHA256="$(sha256sum "$ZC4B_MIGRATION" | awk '{print $1}')"
           if [ "$ACTUAL_SHA256" != "$ZC4B_EXPECTED_SHA256" ]; then
             echo "ZC-4B migration does not match the CLI-generated reviewed artifact." >&2
             echo "Expected: $ZC4B_EXPECTED_SHA256" >&2
             echo "Actual:   $ACTUAL_SHA256" >&2
+            exit 1
+          fi
+
+          if ! grep -q '^-- DEVELOPMENT / DEMO DATA ONLY$' "$HISTORICAL_DEMO_BOOTSTRAP"; then
+            echo "Historical CI bootstrap fixture lost its DEVELOPMENT/DEMO safety marker." >&2
             exit 1
           fi
 
@@ -71,11 +81,18 @@ jobs:
           mkdir -p supabase/migrations
           cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
 
-          MIGRATION_COUNT="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
-          if [ "$MIGRATION_COUNT" -lt 1 ]; then
+          REPOSITORY_MIGRATION_COUNT="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+          if [ "$REPOSITORY_MIGRATION_COUNT" -lt 1 ]; then
             echo "No repository migrations were copied into the isolated workspace." >&2
             exit 1
           fi
+
+          # Historical compatibility fixture only. An already-applied accounting
+          # migration assumes DEMO-KDKMP-DEV exists before its 20260811100623 run.
+          # The source seed is not promoted into database/migrations and this fixture
+          # exists only inside the disposable CI workspace.
+          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" \
+            "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
 
           INVALID_NAMES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
             | grep -Ev '^[0-9]{14}_[a-z0-9_]+\.sql$' || true)"
@@ -93,7 +110,9 @@ jobs:
             exit 1
           fi
 
-          echo "Prepared $MIGRATION_COUNT migrations for isolated replay."
+          TOTAL_REPLAY_FILES="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')"
+          echo "Prepared $REPOSITORY_MIGRATION_COUNT repository migrations plus 1 explicitly documented historical CI bootstrap fixture ($TOTAL_REPLAY_FILES replay files total)."
+          echo "Historical defect: accounting migration 20260811100623 depends on DEMO bootstrap state that is stored separately under database/seeds."
           echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
 
       - name: Start isolated Supabase database and replay every migration
