@@ -1,7 +1,8 @@
 # ADR-007 — Zero-Cost Mode as an Architecture Requirement
 
-**Status:** Proposed  
-**Date:** 2026-08-12
+**Status:** Accepted with ADR-008 archive clarification  
+**Date:** 2026-08-12  
+**Amended:** 2026-08-13
 
 ## Context
 
@@ -24,11 +25,11 @@ The target architecture is:
 - GitHub: private source control, CI and architecture documentation;
 - Supabase Free: operational PostgreSQL + Auth for the initial hot-data layer;
 - Cloudflare Workers/Pages: zero-cost production hosting candidate after a parallel compatibility pilot;
-- Cloudflare R2: zero-cost archive/backup/object-storage candidate within free-tier limits;
+- Cloudflare R2: **NOT AUTHORIZED / NOT ACTIVATED** in the current implementation. It may only be reconsidered after explicit owner authorization and a fresh verification that activation cannot create an unwanted paid/billing commitment;
 - Vercel: keep as development/preview during the migration/pilot period;
 - adapter-based SIMKOPDES integration only through an official API when available, otherwise controlled export/import.
 
-No provider is allowed to auto-upgrade to a paid plan as an application requirement. Any paid-plan activation or domain purchase requires explicit owner authorization.
+No provider is allowed to auto-upgrade to a paid plan as an application requirement. Any paid-plan activation, R2 activation, or domain purchase requires explicit owner authorization.
 
 ## Capacity Policy
 
@@ -42,7 +43,7 @@ Operational targets:
 - never intentionally operate near the Supabase Free 500 MB ceiling;
 - Supabase egress target: < 3.5 GB/month;
 - Cloudflare dynamic request target: < 50,000/day;
-- R2 used-storage target: < 8 GB.
+- no active R2 storage target while R2 remains disabled.
 
 These are internal engineering thresholds, not provider guarantees. Provider limits must be re-verified before production cutover.
 
@@ -66,11 +67,11 @@ Cold archive keeps eligible closed historical detail only after:
 3. archive package is created;
 4. row counts and schema/version metadata are recorded;
 5. checksums are generated;
-6. object is uploaded outside the hot database;
+6. object is uploaded outside the hot database to an approved destination;
 7. read-back verification passes;
-8. restoreability is proven according to the restore policy.
+8. restoreability/reconstruction is proven according to the archive recovery policy.
 
-No destructive pruning is enabled during development. Final retention periods remain DRAFT / SUBJECT TO FINAL REGULATION and approved cooperative policy.
+No destructive pruning is enabled during development. Final retention periods remain DRAFT / SUBJECT TO FINAL REGULATION and approved cooperative policy. ADR-008 adds the non-destructive archive verification and authorization gates.
 
 ## Backup Strategy
 
@@ -83,9 +84,9 @@ Planned zero-cost backup retention target:
 
 - daily: 7 generations;
 - weekly: 4 generations;
-- monthly: 12 generations;
+- monthly: 12 generations.
 
-Retention remains subject to measured backup size and free-tier capacity. A backup is not considered valid until restore-tested.
+Retention remains subject to measured backup size and available zero-cost capacity. A backup is not considered valid until restore-tested.
 
 ## File and Receipt Rules
 
@@ -121,7 +122,7 @@ The future Production Supabase project must not be created until schema/security
 
 Do not replace Vercel abruptly.
 
-The Cloudflare pilot must run in parallel and pass a compatibility matrix covering at minimum:
+The Cloudflare hosting pilot must run in parallel and pass a compatibility matrix covering at minimum:
 
 - login/session refresh;
 - protected routes;
@@ -133,7 +134,7 @@ The Cloudflare pilot must run in parallel and pass a compatibility matrix coveri
 - responsive/mobile operation;
 - error handling and health checks.
 
-Only after the matrix passes can Cloudflare become the production-hosting candidate.
+Only after the matrix passes can Cloudflare become the production-hosting candidate. The hosting pilot does not authorize R2 or any paid Cloudflare product.
 
 ## Domain Decision
 
@@ -147,6 +148,7 @@ Explicit owner authorization is required before:
 
 - purchasing a domain;
 - enabling any paid provider plan;
+- activating Cloudflare R2 or any storage path that requires billing/payment commitment;
 - creating the future real-data Production Supabase project;
 - creating/using production secrets that require owner account consent;
 - activating destructive archive/pruning automation;
