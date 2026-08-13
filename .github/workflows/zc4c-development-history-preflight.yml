@@ -1,0 +1,99 @@
+name: ZC-4C DEVELOPMENT History Preflight
+
+on:
+  push:
+    branches:
+      - agent/zc4c-development-apply-control
+    paths:
+      - '.github/workflows/zc4c-development-history-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  history_preflight:
+    name: compare local and DEVELOPMENT migration history read-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      EXPECTED_PENDING_VERSION: "20260813100013"
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate protected connection secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_DB_URL"
+          case "$SUPABASE_DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo 'SUPABASE_DB_URL has an unexpected scheme.' >&2; exit 1 ;;
+          esac
+
+      - name: Prepare standard Supabase migration workspace
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKDIR="$RUNNER_TEMP/zc4c-history-preflight"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+
+      - name: Verify pinned CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL" = "$SUPABASE_CLI_VERSION"
+
+      - name: Read local versus DEVELOPMENT migration history
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" migration list --db-url "$SUPABASE_DB_URL" | tee "$RUNNER_TEMP/migration-list.txt"
+
+      - name: Assert exact history boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+
+          find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' \
+            | cut -c1-14 | sort -u > "$RUNNER_TEMP/local-versions.txt"
+
+          psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
+            -c "select version from supabase_migrations.schema_migrations order by version" \
+            | sed '/^[[:space:]]*$/d' | sort -u > "$RUNNER_TEMP/remote-versions.txt"
+
+          comm -23 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" \
+            > "$RUNNER_TEMP/local-only.txt"
+          comm -13 "$RUNNER_TEMP/local-versions.txt" "$RUNNER_TEMP/remote-versions.txt" \
+            > "$RUNNER_TEMP/remote-only.txt"
+
+          echo 'Local-only migration versions:'
+          cat "$RUNNER_TEMP/local-only.txt"
+          echo 'Remote-only migration versions:'
+          cat "$RUNNER_TEMP/remote-only.txt"
+
+          if [ "$(wc -l < "$RUNNER_TEMP/local-only.txt" | tr -d ' ')" -ne 1 ] \
+             || [ "$(cat "$RUNNER_TEMP/local-only.txt")" != "$EXPECTED_PENDING_VERSION" ]; then
+            echo "Expected exactly one local-only migration: $EXPECTED_PENDING_VERSION" >&2
+            exit 1
+          fi
+
+          if [ -s "$RUNNER_TEMP/remote-only.txt" ]; then
+            echo 'Remote migration history contains versions missing from repository; refusing apply path.' >&2
+            exit 1
+          fi
+
+          echo 'Migration history boundary is exact and read-only preflight PASSED.'
