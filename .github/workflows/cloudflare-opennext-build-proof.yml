@@ -32,7 +32,8 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       CLOUDFLARE_TELEMETRY_DISABLED: '1'
       ZC5A_OPENNEXT_VERSION: '1.20.2'
-      ZC5A_WRANGLER_VERSION: '4.94.0'
+      ZC5A_WRANGLER_VERSION: '4.122.0'
+      ZC5D_COMPATIBILITY_DATE: '2026-08-11'
       NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321'
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'zc5b-local-placeholder'
 
@@ -67,7 +68,9 @@ jobs:
           cmp package.json /tmp/package.json.before-zc5a
           cmp package-lock.json /tmp/package-lock.json.before-zc5a
           npx --no-install opennextjs-cloudflare --version || true
-          npx --no-install wrangler --version
+          ACTUAL_WRANGLER_VERSION="$(npx --no-install wrangler --version | tr -d '\r')"
+          echo "wrangler_version=${ACTUAL_WRANGLER_VERSION}"
+          test "$ACTUAL_WRANGLER_VERSION" = "$ZC5A_WRANGLER_VERSION"
 
       - name: Create temporary zero-binding Cloudflare config
         shell: bash
@@ -78,13 +81,12 @@ jobs:
           export default defineCloudflareConfig();
           EOF
 
-          cat > wrangler.jsonc <<'EOF'
+          cat > wrangler.jsonc <<EOF
           {
-            "$schema": "./node_modules/wrangler/config-schema.json",
+            "\$schema": "./node_modules/wrangler/config-schema.json",
             "name": "kdkmp-zc5-local-proof",
             "main": ".open-next/worker.js",
-            "compatibility_date": "2026-05-28",
-            "compatibility_flags": ["nodejs_compat"],
+            "compatibility_date": "${ZC5D_COMPATIBILITY_DATE}",
             "assets": {
               "directory": ".open-next/assets",
               "binding": "ASSETS"
@@ -92,12 +94,13 @@ jobs:
           }
           EOF
 
-          grep -Fq '"compatibility_date": "2026-05-28"' wrangler.jsonc
-          if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects|remote[[:space:]]*:[[:space:]]*true' wrangler.jsonc; then
-            echo 'Persistent or remote Cloudflare binding detected in proof config.' >&2
+          grep -Fq "\"compatibility_date\": \"${ZC5D_COMPATIBILITY_DATE}\"" wrangler.jsonc
+          if grep -Eiq 'compatibility_flags|r2_buckets|d1_databases|kv_namespaces|durable_objects|remote[[:space:]]*:[[:space:]]*true' wrangler.jsonc; then
+            echo 'Legacy compatibility flag or persistent/remote binding detected in proof config.' >&2
             exit 1
           fi
-          echo 'local_compatibility_date=2026-05-28'
+          echo "local_compatibility_date=${ZC5D_COMPATIBILITY_DATE}"
+          echo 'nodejs_compat_source=compatibility_date_default'
 
       - name: Create disposable Edge middleware compatibility bridge
         shell: bash
@@ -158,12 +161,14 @@ jobs:
           text = Path('/tmp/zc5a-wrangler-dry-run.log').read_text(errors='replace')
           matches = re.findall(r'gzip:\s*([0-9]+(?:\.[0-9]+)?)\s*KiB', text, flags=re.I)
           if not matches:
-              print('wrangler_gzip_size_kib=UNPARSED')
-          else:
-              size = float(matches[-1])
-              print(f'wrangler_gzip_size_kib={size:.2f}')
-              if size >= 3072:
-                  raise SystemExit(f'Compressed Worker size {size:.2f} KiB exceeds the 3 MiB Free-plan budget.')
+              raise SystemExit('Unable to parse compressed Worker size from Wrangler dry-run output.')
+          size = float(matches[-1])
+          print(f'wrangler_gzip_size_kib={size:.2f}')
+          if size >= 3072:
+              raise SystemExit(f'Compressed Worker size {size:.2f} KiB exceeds the 3 MiB Free-plan budget.')
+          if size >= 2304:
+              raise SystemExit(f'Compressed Worker size {size:.2f} KiB exceeds the 75% internal Free-plan warning budget.')
+          print('worker_size_internal_budget=PASS')
           PY
 
       - name: Exercise local Workers runtime
@@ -171,6 +176,15 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/cloudflare/zc5b-local-runtime-check.sh
+
+      - name: Record remaining Free-plan gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'free_plan_request_limit_per_day=100000'
+          echo 'free_plan_cpu_limit_ms_per_invocation=10'
+          echo 'cpu_budget_local_proof=NOT_EQUIVALENT_TO_REMOTE_WORKERS_CPU'
+          echo 'remote_cpu_measurement_required_before_cutover=true'
 
       - name: Confirm repository and remote safety boundaries
         if: always()
