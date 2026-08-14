@@ -77,13 +77,11 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Install application dependencies
-        run: npm ci
-
-      - name: Install pinned Cloudflare toolchain in runner only
+      - name: Install application and pinned runner-only Cloudflare toolchain
         shell: bash
         run: |
           set -euo pipefail
+          npm ci
           cp package.json /tmp/package.json.before-zc5j-redeploy
           cp package-lock.json /tmp/package-lock.json.before-zc5j-redeploy
           npm install --no-save --package-lock=false \
@@ -93,7 +91,7 @@ jobs:
           cmp package-lock.json /tmp/package-lock.json.before-zc5j-redeploy
           test "$(npx --no-install wrangler --version | tr -d '\r')" = "$WRANGLER_VERSION"
 
-      - name: Verify existing Worker and zero-cost account state
+      - name: Read-only Cloudflare preflight and exactly-once guard
         shell: bash
         run: |
           set -euo pipefail
@@ -102,20 +100,27 @@ jobs:
           npx --no-install wrangler whoami > /tmp/zc5j-whoami.txt
           grep -Fq "$CLOUDFLARE_ACCOUNT_ID" /tmp/zc5j-whoami.txt
 
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/subscriptions" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-subscriptions-pre.json
-
           python3 - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-subscriptions-pre.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Cloudflare subscription read failed.')
+          import json, os, urllib.request
+
+          account = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          token = os.environ['CLOUDFLARE_API_TOKEN']
+          worker = os.environ['WORKER_NAME']
+          marker = os.environ['REDEPLOY_MESSAGE']
+          base = f'https://api.cloudflare.com/client/v4/accounts/{account}'
+
+          def get(path):
+              req = urllib.request.Request(base + path, headers={'Authorization': f'Bearer {token}'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  data = json.load(response)
+              if data.get('success') is not True:
+                  raise SystemExit(f'Cloudflare read failed: {path}')
+              return data.get('result')
+
+          subscriptions = get('/subscriptions') or []
           active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
           paid = []
-          for item in data.get('result') or []:
+          for item in subscriptions:
               try:
                   price = float(item.get('price') or 0)
               except (TypeError, ValueError):
@@ -125,103 +130,53 @@ jobs:
           print(f'predeploy_active_paid_account_subscription_count={len(paid)}')
           if paid:
               raise SystemExit('Zero-cost gate failed: active paid subscription detected.')
-          PY
 
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-workers-list.json
-
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-workers-list.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Unable to list existing Workers.')
-          worker = os.environ['WORKER_NAME']
-          ids = {str(item.get('id')) for item in (data.get('result') or [])}
+          workers = get('/workers/scripts') or []
+          ids = {str(item.get('id')) for item in workers}
           print(f'pilot_worker_preexisting={str(worker in ids).lower()}')
           if worker not in ids:
-              raise SystemExit('Authorized redeploy requires the existing DEVELOPMENT Worker; refusing create.')
-          PY
+              raise SystemExit('Existing DEVELOPMENT Worker not found; refusing create.')
 
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-workers-subdomain.json
-
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-workers-subdomain.json').read_text())
-          subdomain = (data.get('result') or {}).get('subdomain') if data.get('success') else None
+          subdomain = (get('/workers/subdomain') or {}).get('subdomain')
           if not subdomain:
-              raise SystemExit('Existing workers.dev subdomain unavailable; executor will not create one.')
-          host = f"{os.environ['WORKER_NAME']}.{subdomain}.workers.dev"
-          with open(os.environ['GITHUB_ENV'], 'a') as fh:
-              fh.write(f'PILOT_HOST={host}\n')
-          print(f'pilot_host={host}')
-          PY
+              raise SystemExit('Existing workers.dev subdomain unavailable; refusing create.')
+          host = f'{worker}.{subdomain}.workers.dev'
 
-      - name: Verify current bindings and enforce one-time deployment marker
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/settings" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-worker-settings-pre.json
-
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-worker-settings-pre.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Unable to read current Worker settings.')
-          bindings = (data.get('result') or {}).get('bindings') or []
+          settings = get(f'/workers/scripts/{worker}/settings') or {}
+          bindings = settings.get('bindings') or []
           types = sorted({str(item.get('type', '')).lower() for item in bindings})
-          forbidden_terms = ('r2', 'kv', 'd1', 'durable', 'service', 'hyperdrive', 'queue', 'vectorize', 'ai')
-          bad = [t for t in types if any(term in t for term in forbidden_terms)]
+          forbidden_fragments = ('r2', 'kv', 'd1', 'durable', 'service', 'hyperdrive', 'queue', 'vectorize')
+          bad = [t for t in types if t == 'ai' or any(fragment in t for fragment in forbidden_fragments)]
           print(f'predeploy_binding_types={",".join(types) if types else "none"}')
           if bad:
               raise SystemExit(f'Forbidden pre-existing binding types: {bad}')
           print('predeploy_forbidden_binding_count=0')
-          PY
 
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/deployments" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-deployments-pre.json
-
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-deployments-pre.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Unable to list current Worker deployments.')
-          result = data.get('result') or []
+          result = get(f'/workers/scripts/{worker}/deployments') or []
           deployments = result.get('deployments', []) if isinstance(result, dict) else result
           if not deployments:
               raise SystemExit('Existing Worker has no deployment history; refusing overwrite.')
-          marker = os.environ['REDEPLOY_MESSAGE']
           matching = [d for d in deployments if (d.get('annotations') or {}).get('workers/message') == marker]
           print(f'predeploy_matching_redeploy_marker_count={len(matching)}')
           if matching:
-              raise SystemExit('One-time ZC-5J redeploy marker already exists; refusing second redeploy.')
+              raise SystemExit('One-time redeploy marker already exists; refusing second redeploy.')
           latest = max(deployments, key=lambda d: str(d.get('created_on') or ''))
           versions = latest.get('versions') or []
           if not versions:
               raise SystemExit('Unable to resolve current active Worker version.')
           active = max(versions, key=lambda v: float(v.get('percentage') or 0))
-          version_id = str(active.get('version_id') or '')
-          if not version_id:
+          old_version = str(active.get('version_id') or '')
+          if not old_version:
               raise SystemExit('Current active Worker version is missing.')
+
           with open(os.environ['GITHUB_ENV'], 'a') as fh:
-              fh.write(f'PREDEPLOY_VERSION_ID={version_id}\n')
-          print(f'predeploy_version_id={version_id}')
+              fh.write(f'PILOT_HOST={host}\n')
+              fh.write(f'PREDEPLOY_VERSION_ID={old_version}\n')
+          print(f'pilot_host={host}')
+          print(f'predeploy_version_id={old_version}')
           PY
 
-      - name: Create disposable zero-binding config
+      - name: Create zero-binding config and build OpenNext
         shell: bash
         run: |
           set -euo pipefail
@@ -248,17 +203,11 @@ jobs:
               json.dump(config, fh, indent=2)
               fh.write('\n')
           PY
-
           if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects|hyperdrive|queues|services|routes|custom_domain|vectorize|"ai"' wrangler.jsonc; then
-            echo 'Forbidden Cloudflare binding, route, or paid-capability configuration detected.' >&2
+            echo 'Forbidden binding, route, or paid-capability config detected.' >&2
             exit 1
           fi
-          echo 'zero_binding_config=PASS'
 
-      - name: Build OpenNext with runner-only Edge bridge
-        shell: bash
-        run: |
-          set -euo pipefail
           test -s src/proxy.ts
           test ! -e src/middleware.ts
           cp src/proxy.ts /tmp/zc5j-proxy.original
@@ -266,25 +215,24 @@ jobs:
           from pathlib import Path
           src = Path('src/proxy.ts').read_text()
           needle = 'export async function proxy(request: NextRequest)'
-          replacement = 'export async function middleware(request: NextRequest)'
           if src.count(needle) != 1:
               raise SystemExit('Expected exactly one Next.js 16 proxy export.')
-          Path('src/middleware.ts').write_text(src.replace(needle, replacement))
+          Path('src/middleware.ts').write_text(src.replace(needle, 'export async function middleware(request: NextRequest)'))
           PY
           rm src/proxy.ts
           npx --no-install opennextjs-cloudflare build 2>&1 | tee /tmp/zc5j-opennext-build.log
           test -s .open-next/worker.js
           test -d .open-next/assets
           if grep -Fq 'Node.js middleware is not currently supported' /tmp/zc5j-opennext-build.log; then
-            echo 'OpenNext detected unsupported Node Middleware.' >&2
             exit 1
           fi
           rm -f src/middleware.ts
           cp /tmp/zc5j-proxy.original src/proxy.ts
           test -z "$(git status --porcelain -- src)"
+          echo 'opennext_build=PASS'
           echo 'tracked_source_restored=true'
 
-      - name: Strict Wrangler dry-run and size gate
+      - name: Strict Wrangler dry-run and Free-plan size gate
         shell: bash
         run: |
           set -euo pipefail
@@ -323,39 +271,69 @@ jobs:
           echo 'remote_redeployment_attempted=true'
           echo 'authorized_redeploy_count=1'
 
-      - name: Verify version transition and remote route contract
+      - name: Postdeploy version, route, binding, and zero-cost verification
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/deployments" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-deployments-post.json
-
           python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-deployments-post.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Unable to read postdeploy deployment history.')
-          result = data.get('result') or []
-          deployments = result.get('deployments', []) if isinstance(result, dict) else result
+          import json, os, urllib.request
+
+          account = os.environ['CLOUDFLARE_ACCOUNT_ID']
+          token = os.environ['CLOUDFLARE_API_TOKEN']
+          worker = os.environ['WORKER_NAME']
           marker = os.environ['REDEPLOY_MESSAGE']
+          old_version = os.environ['PREDEPLOY_VERSION_ID']
+          base = f'https://api.cloudflare.com/client/v4/accounts/{account}'
+
+          def get(path):
+              req = urllib.request.Request(base + path, headers={'Authorization': f'Bearer {token}'})
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  data = json.load(response)
+              if data.get('success') is not True:
+                  raise SystemExit(f'Cloudflare postdeploy read failed: {path}')
+              return data.get('result')
+
+          result = get(f'/workers/scripts/{worker}/deployments') or []
+          deployments = result.get('deployments', []) if isinstance(result, dict) else result
           matching = [d for d in deployments if (d.get('annotations') or {}).get('workers/message') == marker]
           print(f'postdeploy_matching_redeploy_marker_count={len(matching)}')
           if len(matching) != 1:
-              raise SystemExit('Exactly one authorized ZC-5J redeploy marker was expected.')
+              raise SystemExit('Exactly one authorized redeploy marker expected.')
           versions = matching[0].get('versions') or []
           if not versions:
               raise SystemExit('New deployment has no version reference.')
           active = max(versions, key=lambda v: float(v.get('percentage') or 0))
           new_version = str(active.get('version_id') or '')
-          old_version = os.environ['PREDEPLOY_VERSION_ID']
           print(f'postdeploy_version_id={new_version}')
           if not new_version or new_version == old_version:
-              raise SystemExit('Redeploy did not transition to a new Worker version.')
+              raise SystemExit('Worker version did not transition.')
           print('worker_version_transition=PASS')
+
+          settings = get(f'/workers/scripts/{worker}/settings') or {}
+          bindings = settings.get('bindings') or []
+          types = sorted({str(item.get('type', '')).lower() for item in bindings})
+          forbidden_fragments = ('r2', 'kv', 'd1', 'durable', 'service', 'hyperdrive', 'queue', 'vectorize')
+          bad = [t for t in types if t == 'ai' or any(fragment in t for fragment in forbidden_fragments)]
+          print(f'postdeploy_binding_types={",".join(types) if types else "none"}')
+          if bad:
+              raise SystemExit(f'Forbidden postdeploy binding types: {bad}')
+          print('postdeploy_forbidden_binding_count=0')
+
+          subscriptions = get('/subscriptions') or []
+          active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
+          paid = []
+          for item in subscriptions:
+              try:
+                  price = float(item.get('price') or 0)
+              except (TypeError, ValueError):
+                  price = 0
+              if item.get('state') in active_states and price > 0:
+                  paid.append(item)
+          print(f'postdeploy_active_paid_account_subscription_count={len(paid)}')
+          if paid:
+              raise SystemExit('Paid subscription appeared after redeploy.')
+          print('postdeploy_zero_cost_subscription_gate=PASS')
           PY
 
           base="https://${PILOT_HOST}"
@@ -365,7 +343,6 @@ jobs:
             local body="$3"
             curl --silent --show-error --max-time 20 -D "$headers" -o "$body" -w '%{http_code}' "${base}${path}"
           }
-
           health='000'
           for attempt in $(seq 1 12); do
             health="$(request_status '/api/health' /tmp/health.headers /tmp/health.body || true)"
@@ -385,54 +362,6 @@ jobs:
           echo 'remote_root_redirect=PASS'
           echo 'remote_login_status=200'
           echo 'remote_unauth_dashboard_guard=PASS'
-
-      - name: Verify postdeploy bindings and zero-cost state
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/settings" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-worker-settings-post.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-worker-settings-post.json').read_text())
-          if data.get('success') is not True:
-              raise SystemExit('Unable to read postdeploy Worker settings.')
-          bindings = (data.get('result') or {}).get('bindings') or []
-          types = sorted({str(item.get('type', '')).lower() for item in bindings})
-          forbidden_terms = ('r2', 'kv', 'd1', 'durable', 'service', 'hyperdrive', 'queue', 'vectorize', 'ai')
-          bad = [t for t in types if any(term in t for term in forbidden_terms)]
-          print(f'postdeploy_binding_types={",".join(types) if types else "none"}')
-          if bad:
-              raise SystemExit(f'Forbidden postdeploy binding types: {bad}')
-          print('postdeploy_forbidden_binding_count=0')
-          PY
-
-          curl --fail-with-body --silent --show-error \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/subscriptions" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -o /tmp/zc5j-subscriptions-post.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path('/tmp/zc5j-subscriptions-post.json').read_text())
-          active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
-          paid = []
-          for item in data.get('result') or []:
-              try:
-                  price = float(item.get('price') or 0)
-              except (TypeError, ValueError):
-                  price = 0
-              if item.get('state') in active_states and price > 0:
-                  paid.append(item)
-          print(f'postdeploy_active_paid_account_subscription_count={len(paid)}')
-          if paid:
-              raise SystemExit('Paid subscription appeared after redeploy.')
-          print('postdeploy_zero_cost_subscription_gate=PASS')
-          PY
 
       - name: Final boundary record
         if: always()
