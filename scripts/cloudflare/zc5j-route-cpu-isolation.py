@@ -32,6 +32,16 @@ ROUTES = (
 )
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep redirect responses observable instead of following them."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirect)
+
+
 @dataclass
 class Batch:
     label: str
@@ -59,14 +69,14 @@ def request_status(base: str, path: str) -> int:
     req = urllib.request.Request(
         base.rstrip("/") + path,
         method="GET",
-        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.0"},
+        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.1"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=25) as response:
+        with NO_REDIRECT_OPENER.open(req, timeout=25) as response:
             return int(response.status)
     except urllib.error.HTTPError as exc:
-        # urllib follows neither 307 nor 308 automatically for every method/version;
-        # the HTTP code itself is the evidence we need.
+        # With redirects disabled, 3xx responses arrive here with their original
+        # status code. No Location target is fetched by the diagnostic harness.
         return int(exc.code)
 
 
@@ -79,7 +89,10 @@ def run_batch(base: str, label: str, path: str, expected: int) -> Batch:
         if status != expected:
             raise RuntimeError(f"{label}: expected HTTP {expected}, received {status}")
     ended = datetime.now(timezone.utc)
-    print(f"route_batch={label} sample_requests={len(statuses)} expected_http={expected} result=PASS")
+    print(
+        f"route_batch={label} sample_requests={len(statuses)} expected_http={expected} result=PASS",
+        flush=True,
+    )
     return Batch(label, path, expected, started, ended)
 
 
@@ -109,6 +122,8 @@ def self_test() -> None:
     labels = [item[0] for item in ROUTES]
     assert len(labels) == len(set(labels))
     assert {item[2] for item in ROUTES} <= {200, 307}
+    handler = NoRedirect()
+    assert handler.redirect_request(None, None, 307, "Temporary Redirect", {}, "https://example.invalid") is None
     print("zc5j_route_isolation_self_test=PASS")
 
 
@@ -131,9 +146,9 @@ def main() -> int:
     unit, descriptions = module.query_cpu_unit(token)
     if unit == "unknown":
         raise SystemExit("route_isolation_gate=BLOCKED_CPU_UNIT_UNVERIFIED")
-    print(f"route_isolation_cpu_unit={unit}")
-    print(f"route_isolation_schema_description_count={len(descriptions)}")
-    print("route_isolation_mode=PUBLIC_GET_PLUS_READ_ONLY_GRAPHQL")
+    print(f"route_isolation_cpu_unit={unit}", flush=True)
+    print(f"route_isolation_schema_description_count={len(descriptions)}", flush=True)
+    print("route_isolation_mode=PUBLIC_GET_PLUS_READ_ONLY_GRAPHQL", flush=True)
 
     batches: list[Batch] = []
     for index, (label, path, expected) in enumerate(ROUTES):
@@ -151,7 +166,7 @@ def main() -> int:
                 del pending[label]
         if not pending:
             break
-        print(f"route_isolation_poll={poll} pending={','.join(sorted(pending))}")
+        print(f"route_isolation_poll={poll} pending={','.join(sorted(pending))}", flush=True)
         if poll < MAX_POLLS:
             time.sleep(POLL_SECONDS)
 
@@ -171,7 +186,8 @@ def main() -> int:
         print(
             f"route_cpu label={batch.label} path={batch.path} sample={SAMPLE_SIZE} "
             f"observed={observed} extra_requests={contamination} errors={summary['errors']} "
-            f"exceeded={summary['exceeded_resource_requests']} p50_ms={p50} p99_ms={p99} gate={gate}"
+            f"exceeded={summary['exceeded_resource_requests']} p50_ms={p50} p99_ms={p99} gate={gate}",
+            flush=True,
         )
         if gate.startswith("FAIL_"):
             any_fail = True
