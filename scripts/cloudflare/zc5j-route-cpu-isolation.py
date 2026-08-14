@@ -20,9 +20,10 @@ from pathlib import Path
 
 SAMPLE_SIZE = 20
 BETWEEN_BATCH_SECONDS = 8
-POLL_SECONDS = 15
+INITIAL_INGESTION_WAIT_SECONDS = 150
+POLL_SECONDS = 30
 MAX_POLLS = 6
-WINDOW_PADDING_SECONDS = 1
+WINDOW_PADDING_SECONDS = 2
 
 ROUTES = (
     ("health", "/api/health", 200),
@@ -69,14 +70,12 @@ def request_status(base: str, path: str) -> int:
     req = urllib.request.Request(
         base.rstrip("/") + path,
         method="GET",
-        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.1"},
+        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.2"},
     )
     try:
         with NO_REDIRECT_OPENER.open(req, timeout=25) as response:
             return int(response.status)
     except urllib.error.HTTPError as exc:
-        # With redirects disabled, 3xx responses arrive here with their original
-        # status code. No Location target is fetched by the diagnostic harness.
         return int(exc.code)
 
 
@@ -90,7 +89,8 @@ def run_batch(base: str, label: str, path: str, expected: int) -> Batch:
             raise RuntimeError(f"{label}: expected HTTP {expected}, received {status}")
     ended = datetime.now(timezone.utc)
     print(
-        f"route_batch={label} sample_requests={len(statuses)} expected_http={expected} result=PASS",
+        f"route_batch={label} sample_requests={len(statuses)} expected_http={expected} result=PASS "
+        f"window_start={iso(started)} window_end={iso(ended)}",
         flush=True,
     )
     return Batch(label, path, expected, started, ended)
@@ -119,6 +119,8 @@ def classify_route(module, summary, unit: str) -> tuple[str, float | None, float
 
 def self_test() -> None:
     assert SAMPLE_SIZE >= 10
+    assert INITIAL_INGESTION_WAIT_SECONDS >= 120
+    assert POLL_SECONDS >= 15
     labels = [item[0] for item in ROUTES]
     assert len(labels) == len(set(labels))
     assert {item[2] for item in ROUTES} <= {200, 307}
@@ -156,12 +158,17 @@ def main() -> int:
         if index < len(ROUTES) - 1:
             time.sleep(BETWEEN_BATCH_SECONDS)
 
+    print(f"route_isolation_ingestion_buffer_seconds={INITIAL_INGESTION_WAIT_SECONDS}", flush=True)
+    time.sleep(INITIAL_INGESTION_WAIT_SECONDS)
+
     pending = {batch.label: batch for batch in batches}
     results = {}
     for poll in range(1, MAX_POLLS + 1):
         for label, batch in list(pending.items()):
             summary = query_batch(module, account_id, token, worker, batch)
-            if summary["requests"] >= SAMPLE_SIZE:
+            observed = int(summary["requests"])
+            print(f"route_isolation_observed poll={poll} label={label} requests={observed}", flush=True)
+            if observed >= SAMPLE_SIZE:
                 results[label] = summary
                 del pending[label]
         if not pending:
@@ -197,7 +204,6 @@ def main() -> int:
     print("production_data_used=false")
     print("r2_activated=false")
     print("route_isolation_gate=" + ("CPU_HOTSPOT_IDENTIFIED" if any_fail else "NO_MEDIAN_CPU_FAILURE_IN_ISOLATED_ROUTES"))
-    # A CPU hotspot is diagnostic evidence, not a workflow execution failure.
     return 0
 
 
