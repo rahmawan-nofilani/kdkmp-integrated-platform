@@ -1,0 +1,392 @@
+name: Authorized Cloudflare DEVELOPMENT Pilot
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/authorized-cloudflare-development-pilot.yml'
+      - '.ops/authorizations/20260814-cloudflare-workers-free-development-pilot.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/authorized-cloudflare-development-pilot.yml'
+      - '.ops/authorizations/20260814-cloudflare-workers-free-development-pilot.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authorized-cloudflare-development-pilot
+  cancel-in-progress: false
+
+jobs:
+  build_and_preflight:
+    name: Build + zero-cost preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      CLOUDFLARE_TELEMETRY_DISABLED: '1'
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      OPENNEXT_VERSION: '1.20.2'
+      WRANGLER_VERSION: '4.122.0'
+      COMPATIBILITY_DATE: '2026-08-11'
+      WORKER_NAME: 'kdkmp-development-pilot'
+      NEXT_PUBLIC_SUPABASE_URL: 'https://qdxybbcksjivcidsupbd.supabase.co'
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_euYsJqXdmpF3NFWF-e8ZWg_QaVCPZ6P'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify exact owner authorization scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker='.ops/authorizations/20260814-cloudflare-workers-free-development-pilot.txt'
+          test -s "$marker"
+          grep -Fxq 'AUTHORIZED_BY_USER=true' "$marker"
+          grep -Fxq 'TARGET=Cloudflare Workers Free parallel pilot DEVELOPMENT' "$marker"
+          grep -Fxq 'WORKER_NAME=kdkmp-development-pilot' "$marker"
+          grep -Fxq 'R2=NOT_AUTHORIZED' "$marker"
+          grep -Fxq 'PAID_SERVICES=NOT_AUTHORIZED' "$marker"
+          grep -Fxq 'PRODUCTION_CUTOVER=NOT_AUTHORIZED' "$marker"
+          grep -Fxq 'PRODUCTION_DATA=NOT_AUTHORIZED' "$marker"
+          grep -Fxq 'CUSTOM_DOMAIN=NOT_AUTHORIZED' "$marker"
+          grep -Fxq 'VERCEL_DEVELOPMENT=KEEP_INTACT' "$marker"
+          echo 'authorization_scope=PASS'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Install pinned Cloudflare adapter in runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp package.json /tmp/package.json.before-zc5g
+          cp package-lock.json /tmp/package-lock.json.before-zc5g
+          npm install --no-save --package-lock=false \
+            "@opennextjs/cloudflare@${OPENNEXT_VERSION}" \
+            "wrangler@${WRANGLER_VERSION}"
+          cmp package.json /tmp/package.json.before-zc5g
+          cmp package-lock.json /tmp/package-lock.json.before-zc5g
+          test "$(npx --no-install wrangler --version | tr -d '\r')" = "$WRANGLER_VERSION"
+
+      - name: Verify Cloudflare identity and zero-cost account state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+          test -n "${CLOUDFLARE_API_TOKEN:-}"
+          npx --no-install wrangler whoami > /tmp/whoami.txt
+          grep -Fq "$CLOUDFLARE_ACCOUNT_ID" /tmp/whoami.txt
+
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/subscriptions" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/account-subscriptions.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/account-subscriptions.json').read_text())
+          if data.get('success') is not True:
+              raise SystemExit('Cloudflare subscription read failed.')
+          active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
+          active_paid = []
+          for item in data.get('result') or []:
+              try:
+                  price = float(item.get('price') or 0)
+              except (TypeError, ValueError):
+                  price = 0
+              if item.get('state') in active_states and price > 0:
+                  active_paid.append(item)
+          print(f'active_paid_account_subscription_count={len(active_paid)}')
+          if active_paid:
+              raise SystemExit('Zero-cost gate failed: active paid account subscription detected.')
+          PY
+
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/workers-subdomain.json
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('/tmp/workers-subdomain.json').read_text())
+          subdomain = (data.get('result') or {}).get('subdomain') if data.get('success') else None
+          if not subdomain:
+              raise SystemExit('workers.dev subdomain is not configured; executor will not create one.')
+          worker = os.environ['WORKER_NAME']
+          host = f'{worker}.{subdomain}.workers.dev'
+          with open(os.environ['GITHUB_ENV'], 'a') as fh:
+              fh.write(f'PILOT_HOST={host}\n')
+          print('workers_dev_subdomain_read=PASS')
+          PY
+
+      - name: Fail closed if pilot Worker name already exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/workers-list.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('/tmp/workers-list.json').read_text())
+          if data.get('success') is not True:
+              raise SystemExit('Unable to list existing Workers.')
+          worker = os.environ['WORKER_NAME']
+          ids = {str(item.get('id')) for item in (data.get('result') or [])}
+          print(f'pilot_worker_preexisting={str(worker in ids).lower()}')
+          if worker in ids:
+              raise SystemExit('Pilot Worker already exists; refusing overwrite/redeploy.')
+          PY
+
+      - name: Create disposable zero-binding Cloudflare config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > open-next.config.ts <<'EOF'
+          import { defineCloudflareConfig } from "@opennextjs/cloudflare";
+          export default defineCloudflareConfig();
+          EOF
+
+          python - <<'PY'
+          import json, os
+          config = {
+              '$schema': './node_modules/wrangler/config-schema.json',
+              'name': os.environ['WORKER_NAME'],
+              'main': '.open-next/worker.js',
+              'compatibility_date': os.environ['COMPATIBILITY_DATE'],
+              'workers_dev': True,
+              'assets': {
+                  'directory': '.open-next/assets',
+                  'binding': 'ASSETS',
+              },
+              'vars': {
+                  'NEXT_PUBLIC_SUPABASE_URL': os.environ['NEXT_PUBLIC_SUPABASE_URL'],
+                  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY': os.environ['NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'],
+              },
+          }
+          with open('wrangler.jsonc', 'w') as fh:
+              json.dump(config, fh, indent=2)
+              fh.write('\n')
+          PY
+
+          if grep -Eiq 'r2_buckets|d1_databases|kv_namespaces|durable_objects|hyperdrive|queues|services|routes|custom_domain' wrangler.jsonc; then
+            echo 'Forbidden Cloudflare binding/route detected.' >&2
+            exit 1
+          fi
+          echo 'zero_binding_config=PASS'
+
+      - name: Create runner-only Edge middleware compatibility bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s src/proxy.ts
+          test ! -e src/middleware.ts
+          cp src/proxy.ts /tmp/zc5g-proxy.ts.original
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('src/proxy.ts').read_text()
+          needle = 'export async function proxy(request: NextRequest)'
+          replacement = 'export async function middleware(request: NextRequest)'
+          if src.count(needle) != 1:
+              raise SystemExit('Expected exactly one Next.js 16 proxy export.')
+          Path('src/middleware.ts').write_text(src.replace(needle, replacement))
+          PY
+          rm src/proxy.ts
+          grep -q 'export async function middleware' src/middleware.ts
+          echo 'edge_middleware_bridge=RUNNER_ONLY'
+
+      - name: Build Worker with OpenNext
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --no-install opennextjs-cloudflare build 2>&1 | tee /tmp/zc5g-opennext-build.log
+          test -s .open-next/worker.js
+          test -d .open-next/assets
+          if grep -Fq 'Node.js middleware is not currently supported' /tmp/zc5g-opennext-build.log; then
+            echo 'OpenNext detected unsupported Node Middleware.' >&2
+            exit 1
+          fi
+
+      - name: Restore tracked Next.js source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f src/middleware.ts
+          if [ -f /tmp/zc5g-proxy.ts.original ]; then
+            cp /tmp/zc5g-proxy.ts.original src/proxy.ts
+          fi
+          test -s src/proxy.ts
+          test -z "$(git status --porcelain -- src)"
+          echo 'tracked_source_restored=true'
+
+      - name: Wrangler dry-run and Free-plan size gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/zc5g-wrangler-out
+          npx --no-install wrangler deploy --dry-run --outdir /tmp/zc5g-wrangler-out 2>&1 | tee /tmp/zc5g-wrangler-dry-run.log
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text = Path('/tmp/zc5g-wrangler-dry-run.log').read_text(errors='replace')
+          matches = re.findall(r'gzip:\s*([0-9]+(?:\.[0-9]+)?)\s*KiB', text, flags=re.I)
+          if not matches:
+              raise SystemExit('Unable to parse compressed Worker size.')
+          size = float(matches[-1])
+          print(f'wrangler_gzip_size_kib={size:.2f}')
+          if size >= 2304:
+              raise SystemExit('Worker exceeds internal 75% Free-plan size budget.')
+          print('worker_size_internal_budget=PASS')
+          PY
+
+      - name: Confirm PR phase has no remote write
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'pr_remote_deployment_attempted=false'
+          echo 'pr_cloudflare_storage_write_attempted=false'
+          echo 'pr_paid_service_activation_attempted=false'
+
+      - name: Deploy one-time DEVELOPMENT pilot to workers.dev
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --no-install wrangler deploy 2>&1 | tee /tmp/zc5g-deploy.log
+          grep -Fq "${PILOT_HOST}" /tmp/zc5g-deploy.log || true
+          echo 'remote_deployment_attempted=true'
+
+      - name: Verify remote routes and authorization boundary
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://${PILOT_HOST}"
+
+          request_status() {
+            local path="$1"
+            local headers="$2"
+            local body="$3"
+            local code
+            code="$(curl --silent --show-error --max-time 20 -D "$headers" -o "$body" -w '%{http_code}' "${base}${path}")"
+            printf '%s' "$code"
+          }
+
+          health='000'
+          for attempt in $(seq 1 12); do
+            health="$(request_status '/api/health' /tmp/health.headers /tmp/health.body || true)"
+            [ "$health" = '200' ] && break
+            sleep 5
+          done
+          test "$health" = '200'
+          echo 'remote_health_status=200'
+
+          root="$(request_status '/' /tmp/root.headers /tmp/root.body)"
+          test "$root" = '307'
+          grep -Eiq '^location: .*\/dashboard' /tmp/root.headers
+          echo 'remote_root_redirect=PASS'
+
+          login="$(request_status '/login' /tmp/login.headers /tmp/login.body)"
+          test "$login" = '200'
+          echo 'remote_login_status=200'
+
+          dashboard="$(request_status '/dashboard' /tmp/dashboard.headers /tmp/dashboard.body)"
+          test "$dashboard" = '307'
+          grep -Eiq '^location: .*\/login' /tmp/dashboard.headers
+          echo 'remote_unauth_dashboard_guard=PASS'
+
+      - name: Verify deployed Worker has no forbidden bindings
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/settings" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/worker-settings.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/worker-settings.json').read_text())
+          if data.get('success') is not True:
+              raise SystemExit('Unable to read deployed Worker settings.')
+          bindings = (data.get('result') or {}).get('bindings') or []
+          types = sorted({str(item.get('type', '')).lower() for item in bindings})
+          forbidden_terms = ('r2', 'kv', 'd1', 'durable', 'service', 'hyperdrive', 'queue')
+          bad = [t for t in types if any(term in t for term in forbidden_terms)]
+          print(f'deployed_binding_types={",".join(types) if types else "none"}')
+          if bad:
+              raise SystemExit(f'Forbidden deployed binding types: {bad}')
+          print('deployed_forbidden_binding_count=0')
+          PY
+
+      - name: Verify paid subscription count remains zero after deploy
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/subscriptions" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/account-subscriptions-post.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/account-subscriptions-post.json').read_text())
+          active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
+          paid = []
+          for item in data.get('result') or []:
+              try:
+                  price = float(item.get('price') or 0)
+              except (TypeError, ValueError):
+                  price = 0
+              if item.get('state') in active_states and price > 0:
+                  paid.append(item)
+          print(f'postdeploy_active_paid_account_subscription_count={len(paid)}')
+          if paid:
+              raise SystemExit('Paid subscription appeared after deploy; pilot must not proceed toward cutover.')
+          print('postdeploy_zero_cost_subscription_gate=PASS')
+          PY
+
+      - name: Final pilot boundary record
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "pilot_url=https://${PILOT_HOST}"
+          echo 'r2_activated=false'
+          echo 'paid_service_activated=false'
+          echo 'custom_domain_configured=false'
+          echo 'production_cutover=false'
+          echo 'production_data_used=false'
+          echo 'vercel_development_kept_intact=true'
+          echo 'authenticated_session_e2e=NOT_YET_PROVEN'
+          echo 'remote_cpu_budget_measurement=STILL_REQUIRED'
+
+      - name: Confirm repository files were not mutated by runner tooling
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp package.json /tmp/package.json.before-zc5g
+          cmp package-lock.json /tmp/package-lock.json.before-zc5g
+          test -z "$(git status --porcelain -- package.json package-lock.json src)"
+          echo 'repository_source_mutation=false'
