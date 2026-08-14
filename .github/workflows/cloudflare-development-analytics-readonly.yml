@@ -45,17 +45,17 @@ jobs:
           workflow = Path('.github/workflows/cloudflare-development-analytics-readonly.yml').read_text().lower()
           script = Path('scripts/cloudflare/zc5h-readonly-worker-analytics.py').read_text()
 
-          forbidden_workflow_commands = (
-              'wrangler deploy',
-              'wrangler delete',
-              'wrangler rollback',
+          forbidden_workflow_commands = tuple(
+              'wrangler ' + verb for verb in ('deploy', 'delete', 'rollback')
           )
           for command in forbidden_workflow_commands:
               if command in workflow:
                   raise SystemExit(f'Read-only contract violation: {command}')
 
           for method in ('PUT', 'PATCH', 'DELETE'):
-              if f'method="{method}"' in script or f"method='{method}'" in script:
+              double_quoted = 'method=' + chr(34) + method + chr(34)
+              single_quoted = 'method=' + chr(39) + method + chr(39)
+              if double_quoted in script or single_quoted in script:
                   raise SystemExit(f'Read-only contract violation: HTTP {method}')
 
           required = 'GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"'
