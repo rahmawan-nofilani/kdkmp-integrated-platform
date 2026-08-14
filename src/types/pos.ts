@@ -77,6 +77,12 @@ export type PosCatalogItem = {
   in_stock:boolean;
 };
 
+export type PosCustomerOption = {
+  member_id:string;
+  member_number:string|null;
+  full_name:string;
+};
+
 export type PosCartLine = SalesTransactionLineRow;
 export type PosReceipt = PosReceiptRow;
 
@@ -89,6 +95,20 @@ type PosCatalogRequestRow = {
   search_query:string|null;
   result_limit:number;
   result:PosCatalogItem[];
+  requested_by:string|null;
+  created_at:string;
+};
+
+type PosCustomerLookupRequestRow = {
+  id:string;
+  organization_id:string|null;
+  organization_node_id:string|null;
+  organization_unit_id:string|null;
+  terminal_id:string;
+  customer_member_id:string|null;
+  search_query:string|null;
+  result_limit:number;
+  result:PosCustomerOption[];
   requested_by:string|null;
   created_at:string;
 };
@@ -106,6 +126,7 @@ type PosFunctions = CommercialDatabase["public"]["Functions"] & {
   cancel_pos_sale: { Args: { p_sales_transaction_id:string; p_idempotency_key:string }; Returns:string };
   start_pos_payment: { Args: { p_sales_transaction_id:string; p_channel:string; p_idempotency_key:string; p_provider_code?:string|null }; Returns:{ payment_intent_id:string; payment_attempt_id:string }[] };
   complete_cash_pos_sale: { Args: { p_sales_transaction_id:string; p_cash_received:number; p_idempotency_key:string }; Returns:{ payment_intent_id:string; payment_attempt_id:string; inventory_movement_id:string; journal_entry_id:string; cash_movement_id:string; receipt_id:string }[] };
+  link_pos_sale_customer: { Args: { p_sales_transaction_id:string; p_customer_member_id:string|null; p_idempotency_key:string }; Returns:string };
 };
 
 export type PosDatabase = Omit<CommercialDatabase,"public"> & {
@@ -122,6 +143,7 @@ export type PosDatabase = Omit<CommercialDatabase,"public"> & {
       pos_payment_commands: TableShape<PosPaymentCommandRow>;
       pos_cash_completion_commands: TableShape<PosCashCompletionCommandRow>;
       pos_catalog_requests: TableShape<PosCatalogRequestRow>;
+      pos_customer_lookup_requests: TableShape<PosCustomerLookupRequestRow>;
     };
     Functions: PosFunctions;
   };

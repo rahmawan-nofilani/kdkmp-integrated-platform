@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { asPosClient, type PosCatalogItem, type PosCartLine } from "@/types/pos";
+import { asPosClient, type PosCatalogItem, type PosCartLine, type PosCustomerOption } from "@/types/pos";
 import { PosCatalog } from "./catalog";
 import { PosCart } from "./cart";
+import { PosCustomer } from "./customer";
 import { PosPayment } from "./payment";
 import { PosReceiptSuccess, type PosReceiptView } from "./receipt";
 import { PosShiftControl } from "./shift-control";
@@ -103,8 +104,10 @@ export default async function PosWorkspacePage({
     discount_amount: number;
     tax_amount: number;
     total_amount: number;
+    customer_member_id: string | null;
   } | null = null;
   let cartLines: PosCartLine[] = [];
+  let selectedCustomer: PosCustomerOption | null = null;
 
   if (shiftReady && selectedTerminal && ownOpenShift) {
     const [catalogResult, activeSaleResult] = await Promise.all([
@@ -115,7 +118,7 @@ export default async function PosWorkspacePage({
         .single(),
       db
         .from("sales_transactions")
-        .select("id,sale_number,currency,subtotal,discount_amount,tax_amount,total_amount")
+        .select("id,sale_number,currency,subtotal,discount_amount,tax_amount,total_amount,customer_member_id")
         .eq("pos_shift_id", ownOpenShift.id)
         .eq("created_by", profile.id)
         .eq("sale_type", "POS")
@@ -136,6 +139,20 @@ export default async function PosWorkspacePage({
         .eq("sales_transaction_id", activeSale.id)
         .order("line_no");
       cartLines = lineResult.data ?? [];
+
+      if (activeSale.customer_member_id) {
+        const customerResult = await db
+          .from("pos_customer_lookup_requests")
+          .insert({
+            terminal_id: selectedTerminal.id,
+            customer_member_id: activeSale.customer_member_id,
+            search_query: null,
+            result_limit: 1,
+          })
+          .select("result")
+          .single();
+        selectedCustomer = customerResult.data?.result?.[0] ?? null;
+      }
     }
   }
 
@@ -233,6 +250,13 @@ export default async function PosWorkspacePage({
             <PosReceiptSuccess receipt={receiptView} />
           ) : (
             <>
+              <PosCustomer
+                saleId={activeSale?.id ?? null}
+                terminalId={selectedTerminal?.id ?? null}
+                selectedCustomer={selectedCustomer}
+                canEdit={Boolean(shiftReady && canCreateSale)}
+              />
+
               <PosCart
                 sale={activeSale ? {
                   id: activeSale.id,
