@@ -39,21 +39,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          workflow='.github/workflows/cloudflare-development-analytics-readonly.yml'
-          script='scripts/cloudflare/zc5h-readonly-worker-analytics.py'
+          python3 - <<'PY'
+          from pathlib import Path
 
-          if grep -Eiq '^[[:space:]]*(npx[[:space:]]+--no-install[[:space:]]+)?wrangler[[:space:]]+(deploy|delete|rollback)([[:space:]]|$)' "$workflow"; then
-            echo 'Wrangler mutation command detected.' >&2
-            exit 1
-          fi
+          workflow = Path('.github/workflows/cloudflare-development-analytics-readonly.yml').read_text().lower()
+          script = Path('scripts/cloudflare/zc5h-readonly-worker-analytics.py').read_text()
 
-          if grep -Eiq 'method[[:space:]]*=[[:space:]]*["'"'](PUT|PATCH|DELETE)["'"']' "$script"; then
-            echo 'Cloudflare mutation HTTP method detected in analytics script.' >&2
-            exit 1
-          fi
+          forbidden_workflow_commands = (
+              'wrangler deploy',
+              'wrangler delete',
+              'wrangler rollback',
+          )
+          for command in forbidden_workflow_commands:
+              if command in workflow:
+                  raise SystemExit(f'Read-only contract violation: {command}')
 
-          grep -Fq 'GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"' "$script"
-          echo 'read_only_contract=PASS'
+          for method in ('PUT', 'PATCH', 'DELETE'):
+              if f'method="{method}"' in script or f"method='{method}'" in script:
+                  raise SystemExit(f'Read-only contract violation: HTTP {method}')
+
+          required = 'GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"'
+          if required not in script:
+              raise SystemExit('Expected Cloudflare GraphQL analytics endpoint is missing.')
+
+          print('read_only_contract=PASS')
+          PY
 
   remote_analytics:
     name: DEVELOPMENT Worker analytics read
