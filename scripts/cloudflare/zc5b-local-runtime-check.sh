@@ -82,10 +82,27 @@ if [ "$LOGIN_CODE" != '200' ]; then
   exit 1
 fi
 
+DASHBOARD_CODE="$(curl --silent --show-error --output /tmp/zc5b-dashboard.html --dump-header /tmp/zc5b-dashboard.headers --write-out '%{http_code}' --max-time 5 "${BASE_URL}/dashboard" 2>/tmp/zc5b-dashboard-curl.err || true)"
+if [ "$DASHBOARD_CODE" != '307' ]; then
+  echo "Unauthenticated dashboard guard failed; expected 307 to /login, got status=${DASHBOARD_CODE:-none}." >&2
+  cat /tmp/zc5b-dashboard-curl.err >&2 || true
+  cat /tmp/zc5b-dashboard.headers >&2 || true
+  show_diagnostics
+  exit 1
+fi
+if ! grep -Eiq '^location:[[:space:]]*/login[[:space:]]*$' /tmp/zc5b-dashboard.headers; then
+  echo 'Unauthenticated dashboard redirect target is not /login.' >&2
+  cat /tmp/zc5b-dashboard.headers >&2 || true
+  show_diagnostics
+  exit 1
+fi
+
 echo 'health_status=200'
 echo 'root_status=307'
 echo 'root_redirect=/dashboard'
 echo 'login_status=200'
+echo 'unauth_dashboard_status=307'
+echo 'unauth_dashboard_redirect=/login'
 echo 'workerd_local_runtime=PASSED'
 echo 'cloudflare_remote_touched=false'
 echo 'deployment_attempted=false'
