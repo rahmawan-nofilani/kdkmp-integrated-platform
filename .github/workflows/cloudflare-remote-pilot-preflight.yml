@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   preflight:
-    name: Credential presence + read-only Cloudflare identity
+    name: Credential + account read-only preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -65,6 +65,83 @@ jobs:
           npx --no-install wrangler whoami > /tmp/whoami.txt
           grep -Fq "$CLOUDFLARE_ACCOUNT_ID" /tmp/whoami.txt
           echo 'cloudflare_identity_read_only=PASS'
+
+      - name: Verify no active paid account subscription
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/subscriptions" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -o /tmp/account-subscriptions.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('/tmp/account-subscriptions.json').read_text())
+          if data.get('success') is not True:
+              raise SystemExit('Cloudflare subscription API did not return success=true.')
+
+          active_states = {'Trial', 'Provisioned', 'Paid', 'AwaitingPayment'}
+          active_paid = []
+          for item in data.get('result') or []:
+              state = item.get('state')
+              price = item.get('price')
+              try:
+                  numeric_price = float(price or 0)
+              except (TypeError, ValueError):
+                  numeric_price = 0
+              if state in active_states and numeric_price > 0:
+                  active_paid.append({
+                      'state': state,
+                      'price': numeric_price,
+                      'plan': (item.get('rate_plan') or {}).get('public_name') or (item.get('rate_plan') or {}).get('id') or 'unknown',
+                  })
+
+          print(f'account_subscription_count={len(data.get("result") or [])}')
+          print(f'active_paid_account_subscription_count={len(active_paid)}')
+          if active_paid:
+              for item in active_paid:
+                  print(f'active_paid_subscription_detected plan={item["plan"]} state={item["state"]} price_usd={item["price"]:.2f}')
+              raise SystemExit('Paid account subscription detected; zero-cost pilot is blocked.')
+          print('zero_cost_account_subscription_gate=PASS')
+          PY
+
+      - name: Read Workers subdomain state without creating it
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error \
+            -o /tmp/workers-subdomain.json \
+            -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/subdomain" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")"
+
+          if [ "$status" = '200' ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('/tmp/workers-subdomain.json').read_text())
+          if data.get('success') is not True:
+              raise SystemExit('Workers subdomain API returned HTTP 200 without success=true.')
+          configured = bool((data.get('result') or {}).get('subdomain'))
+          print(f'workers_dev_subdomain_configured={str(configured).lower()}')
+          PY
+          elif [ "$status" = '404' ]; then
+            echo 'workers_dev_subdomain_configured=false'
+          else
+            echo "Unexpected Workers subdomain read status=${status}" >&2
+            cat /tmp/workers-subdomain.json >&2
+            exit 1
+          fi
+
+      - name: Confirm read-only boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'remote_pilot_preflight=PASS'
           echo 'deployment_attempted=false'
           echo 'storage_binding_attempted=false'
           echo 'paid_service_activation_attempted=false'
+          echo 'production_cutover_attempted=false'
