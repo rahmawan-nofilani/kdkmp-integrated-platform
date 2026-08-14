@@ -1,0 +1,99 @@
+name: Cloudflare DEVELOPMENT Route CPU Isolation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloudflare-development-route-cpu-isolation.yml'
+      - 'scripts/cloudflare/zc5j-route-cpu-isolation.py'
+      - 'scripts/cloudflare/zc5h-readonly-worker-analytics.py'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloudflare-development-route-cpu-isolation.yml'
+      - 'scripts/cloudflare/zc5j-route-cpu-isolation.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-development-route-cpu-isolation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Static route-isolation contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify route-isolation self-test
+        run: python3 scripts/cloudflare/zc5j-route-cpu-isolation.py --self-test
+
+      - name: Reject Cloudflare resource mutation paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          paths = [
+              Path('.github/workflows/cloudflare-development-route-cpu-isolation.yml'),
+              Path('scripts/cloudflare/zc5j-route-cpu-isolation.py'),
+          ]
+          text = '\n'.join(path.read_text().lower() for path in paths)
+          forbidden = tuple('wrangler ' + verb for verb in ('deploy', 'delete', 'rollback'))
+          for command in forbidden:
+              if command in text:
+                  raise SystemExit(f'Forbidden Cloudflare mutation command: {command}')
+          script = Path('scripts/cloudflare/zc5j-route-cpu-isolation.py').read_text()
+          for method in ('PUT', 'PATCH', 'DELETE'):
+              if f'method="{method}"' in script or f"method='{method}'" in script:
+                  raise SystemExit(f'Forbidden HTTP mutation method: {method}')
+          print('route_isolation_read_only_contract=PASS')
+          PY
+
+  remote_probe:
+    name: DEVELOPMENT route CPU isolation read
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_TOKEN }}
+      WORKER_NAME: kdkmp-development-pilot
+      PILOT_URL: https://kdkmp-development-pilot.nofilanirahmawan.workers.dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm diagnostic-only boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+          test -n "${CLOUDFLARE_ANALYTICS_TOKEN:-}"
+          echo 'cloudflare_resource_write_authorized=false'
+          echo 'worker_redeploy_authorized=false'
+          echo 'r2_authorized=false'
+          echo 'paid_service_activation_authorized=false'
+          echo 'production_cutover_authorized=false'
+
+      - name: Run public route CPU isolation probe
+        run: python3 scripts/cloudflare/zc5j-route-cpu-isolation.py
+
+      - name: Final no-write record
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'cloudflare_resource_write_attempted=false'
+          echo 'worker_redeploy_attempted=false'
+          echo 'database_write_attempted=false'
+          echo 'production_data_used=false'
+          echo 'custom_domain_changed=false'
+          echo 'r2_activated=false'
