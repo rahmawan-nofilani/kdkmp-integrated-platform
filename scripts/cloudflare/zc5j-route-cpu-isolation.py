@@ -4,12 +4,17 @@
 Safety: this probe sends only unauthenticated GET requests to the existing
 DEVELOPMENT pilot and read-only GraphQL analytics queries. It never deploys,
 updates, deletes, or reconfigures Cloudflare resources.
+
+The Workers invocations dataset is adaptive/sampled. Route-level results are
+therefore diagnostic evidence only; they identify likely hotspots but never
+constitute the final Free-plan readiness decision.
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import math
 import os
 import time
 import urllib.error
@@ -19,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SAMPLE_SIZE = 20
+MIN_COVERAGE_RATIO = 0.75
 BETWEEN_BATCH_SECONDS = 8
 INITIAL_INGESTION_WAIT_SECONDS = 150
 POLL_SECONDS = 30
@@ -70,7 +76,7 @@ def request_status(base: str, path: str) -> int:
     req = urllib.request.Request(
         base.rstrip("/") + path,
         method="GET",
-        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.2"},
+        headers={"User-Agent": "kdkmp-zc5j-route-isolation/1.3"},
     )
     try:
         with NO_REDIRECT_OPENER.open(req, timeout=25) as response:
@@ -117,8 +123,14 @@ def classify_route(module, summary, unit: str) -> tuple[str, float | None, float
     return cpu["gate"], cpu["p50_ms"], cpu["p99_ms"]
 
 
+def minimum_observed_requests() -> int:
+    return math.ceil(SAMPLE_SIZE * MIN_COVERAGE_RATIO)
+
+
 def self_test() -> None:
     assert SAMPLE_SIZE >= 10
+    assert 0.5 <= MIN_COVERAGE_RATIO < 1.0
+    assert minimum_observed_requests() == 15
     assert INITIAL_INGESTION_WAIT_SECONDS >= 120
     assert POLL_SECONDS >= 15
     labels = [item[0] for item in ROUTES]
@@ -151,6 +163,8 @@ def main() -> int:
     print(f"route_isolation_cpu_unit={unit}", flush=True)
     print(f"route_isolation_schema_description_count={len(descriptions)}", flush=True)
     print("route_isolation_mode=PUBLIC_GET_PLUS_READ_ONLY_GRAPHQL", flush=True)
+    print("route_isolation_evidence_class=DIAGNOSTIC_ONLY_ADAPTIVE_DATASET", flush=True)
+    print(f"route_isolation_min_coverage_ratio={MIN_COVERAGE_RATIO:.2f}", flush=True)
 
     batches: list[Batch] = []
     for index, (label, path, expected) in enumerate(ROUTES):
@@ -161,14 +175,20 @@ def main() -> int:
     print(f"route_isolation_ingestion_buffer_seconds={INITIAL_INGESTION_WAIT_SECONDS}", flush=True)
     time.sleep(INITIAL_INGESTION_WAIT_SECONDS)
 
+    required_observed = minimum_observed_requests()
     pending = {batch.label: batch for batch in batches}
     results = {}
     for poll in range(1, MAX_POLLS + 1):
         for label, batch in list(pending.items()):
             summary = query_batch(module, account_id, token, worker, batch)
             observed = int(summary["requests"])
-            print(f"route_isolation_observed poll={poll} label={label} requests={observed}", flush=True)
-            if observed >= SAMPLE_SIZE:
+            coverage = observed / SAMPLE_SIZE
+            print(
+                f"route_isolation_observed poll={poll} label={label} requests={observed} "
+                f"coverage={coverage:.3f}",
+                flush=True,
+            )
+            if observed >= required_observed:
                 results[label] = summary
                 del pending[label]
         if not pending:
@@ -178,7 +198,7 @@ def main() -> int:
             time.sleep(POLL_SECONDS)
 
     if pending:
-        print("route_isolation_gate=INSUFFICIENT_INGESTION")
+        print("route_isolation_gate=INSUFFICIENT_ADAPTIVE_COVERAGE")
         print("route_isolation_pending=" + ",".join(sorted(pending)))
         return 2
 
@@ -187,13 +207,15 @@ def main() -> int:
         summary = results[batch.label]
         gate, p50_ms, p99_ms = classify_route(module, summary, unit)
         observed = int(summary["requests"])
+        coverage = observed / SAMPLE_SIZE
         contamination = max(0, observed - SAMPLE_SIZE)
         p50 = "none" if p50_ms is None else f"{p50_ms:.6f}"
         p99 = "none" if p99_ms is None else f"{p99_ms:.6f}"
         print(
-            f"route_cpu label={batch.label} path={batch.path} sample={SAMPLE_SIZE} "
-            f"observed={observed} extra_requests={contamination} errors={summary['errors']} "
-            f"exceeded={summary['exceeded_resource_requests']} p50_ms={p50} p99_ms={p99} gate={gate}",
+            f"route_cpu label={batch.label} path={batch.path} sent={SAMPLE_SIZE} "
+            f"observed={observed} coverage={coverage:.3f} extra_requests={contamination} "
+            f"errors={summary['errors']} exceeded={summary['exceeded_resource_requests']} "
+            f"p50_ms={p50} p99_ms={p99} gate={gate} evidence=DIAGNOSTIC_ONLY",
             flush=True,
         )
         if gate.startswith("FAIL_"):
