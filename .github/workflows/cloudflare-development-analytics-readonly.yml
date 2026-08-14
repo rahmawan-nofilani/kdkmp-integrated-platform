@@ -1,0 +1,130 @@
+name: Cloudflare DEVELOPMENT Analytics Read Only
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloudflare-development-analytics-readonly.yml'
+      - 'scripts/cloudflare/zc5h-readonly-worker-analytics.py'
+      - 'docs/operations/zc5h-cloudflare-development-analytics.md'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloudflare-development-analytics-readonly.yml'
+      - 'scripts/cloudflare/zc5h-readonly-worker-analytics.py'
+      - 'docs/operations/zc5h-cloudflare-development-analytics.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-development-analytics-readonly
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Static analytics contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify read-only parser contract
+        run: python3 scripts/cloudflare/zc5h-readonly-worker-analytics.py --self-test
+
+      - name: Reject actual Cloudflare mutation commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/cloudflare-development-analytics-readonly.yml').read_text().lower()
+          script = Path('scripts/cloudflare/zc5h-readonly-worker-analytics.py').read_text()
+
+          forbidden_workflow_commands = tuple(
+              'wrangler ' + verb for verb in ('deploy', 'delete', 'rollback')
+          )
+          for command in forbidden_workflow_commands:
+              if command in workflow:
+                  raise SystemExit(f'Read-only contract violation: {command}')
+
+          for method in ('PUT', 'PATCH', 'DELETE'):
+              double_quoted = 'method=' + chr(34) + method + chr(34)
+              single_quoted = 'method=' + chr(39) + method + chr(39)
+              if double_quoted in script or single_quoted in script:
+                  raise SystemExit(f'Read-only contract violation: HTTP {method}')
+
+          required = 'GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"'
+          if required not in script:
+              raise SystemExit('Expected Cloudflare GraphQL analytics endpoint is missing.')
+
+          print('read_only_contract=PASS')
+          PY
+
+  remote_analytics:
+    name: DEVELOPMENT Worker analytics read
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ANALYTICS_TOKEN: ${{ secrets.CLOUDFLARE_ANALYTICS_TOKEN }}
+      WORKER_NAME: kdkmp-development-pilot
+      ANALYTICS_LOOKBACK_HOURS: '24'
+      PILOT_URL: https://kdkmp-development-pilot.nofilanirahmawan.workers.dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm zero-write execution boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'cloudflare_resource_write_authorized=false'
+          echo 'cloudflare_resource_write_attempted=false'
+          echo 'r2_authorized=false'
+          echo 'paid_service_activation_authorized=false'
+          echo 'production_cutover_authorized=false'
+
+      - name: Generate small read-only pilot sample when analytics token exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ANALYTICS_TOKEN:-}" ]; then
+            echo 'analytics_probe_sample=SKIPPED_SECRET_MISSING'
+            exit 0
+          fi
+
+          request_status() {
+            local path="$1"
+            curl --silent --show-error --max-time 20 \
+              -o /dev/null -w '%{http_code}' "${PILOT_URL}${path}"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            test "$(request_status '/api/health')" = '200'
+            test "$(request_status '/login')" = '200'
+            test "$(request_status '/')" = '307'
+            test "$(request_status '/dashboard')" = '307'
+          done
+          echo 'analytics_probe_sample_requests=20'
+          echo 'analytics_probe_sample=PASS'
+
+      - name: Query Cloudflare GraphQL analytics read-only
+        run: python3 scripts/cloudflare/zc5h-readonly-worker-analytics.py
+
+      - name: Final no-write record
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'cloudflare_resource_write_attempted=false'
+          echo 'database_write_attempted=false'
+          echo 'production_data_used=false'
+          echo 'custom_domain_changed=false'
+          echo 'r2_activated=false'
