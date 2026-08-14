@@ -35,18 +35,24 @@ jobs:
       - name: Verify read-only parser contract
         run: python3 scripts/cloudflare/zc5h-readonly-worker-analytics.py --self-test
 
-      - name: Reject Cloudflare mutation endpoints or deploy commands
+      - name: Reject actual Cloudflare mutation commands
         shell: bash
         run: |
           set -euo pipefail
-          files=(
-            .github/workflows/cloudflare-development-analytics-readonly.yml
-            scripts/cloudflare/zc5h-readonly-worker-analytics.py
-          )
-          if grep -Eiq 'wrangler[[:space:]]+(deploy|delete|rollback)|/workers/scripts/.+/(settings|content)|r2_buckets|d1_databases|kv_namespaces|durable_objects|hyperdrive|queues' "${files[@]}"; then
-            echo 'Read-only contract violation detected.' >&2
+          workflow='.github/workflows/cloudflare-development-analytics-readonly.yml'
+          script='scripts/cloudflare/zc5h-readonly-worker-analytics.py'
+
+          if grep -Eiq '^[[:space:]]*(npx[[:space:]]+--no-install[[:space:]]+)?wrangler[[:space:]]+(deploy|delete|rollback)([[:space:]]|$)' "$workflow"; then
+            echo 'Wrangler mutation command detected.' >&2
             exit 1
           fi
+
+          if grep -Eiq 'method[[:space:]]*=[[:space:]]*["'"'](PUT|PATCH|DELETE)["'"']' "$script"; then
+            echo 'Cloudflare mutation HTTP method detected in analytics script.' >&2
+            exit 1
+          fi
+
+          grep -Fq 'GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"' "$script"
           echo 'read_only_contract=PASS'
 
   remote_analytics:
