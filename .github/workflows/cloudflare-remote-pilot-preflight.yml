@@ -1,0 +1,70 @@
+name: Cloudflare Remote Pilot Preflight
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cloudflare-remote-pilot-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Credential presence + read-only Cloudflare identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WRANGLER_VERSION: '4.122.0'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Require Cloudflare pilot credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo 'missing_secret=CLOUDFLARE_ACCOUNT_ID'
+            missing=1
+          else
+            echo 'cloudflare_account_id_present=true'
+          fi
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo 'missing_secret=CLOUDFLARE_API_TOKEN'
+            missing=1
+          else
+            echo 'cloudflare_api_token_present=true'
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo 'remote_pilot_preflight=BLOCKED_MISSING_GITHUB_SECRETS' >&2
+            exit 1
+          fi
+
+      - name: Install pinned Wrangler in runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false "wrangler@${WRANGLER_VERSION}"
+          test "$(npx --no-install wrangler --version | tr -d '\r')" = "$WRANGLER_VERSION"
+
+      - name: Verify Cloudflare identity read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --no-install wrangler whoami > /tmp/whoami.txt
+          grep -Fq "$CLOUDFLARE_ACCOUNT_ID" /tmp/whoami.txt
+          echo 'cloudflare_identity_read_only=PASS'
+          echo 'deployment_attempted=false'
+          echo 'storage_binding_attempted=false'
+          echo 'paid_service_activation_attempted=false'
