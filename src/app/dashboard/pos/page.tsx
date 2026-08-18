@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { asPosClient, type PosCatalogItem, type PosCartLine, type PosCustomerOption } from "@/types/pos";
+import { asPosPartialReturnClient } from "@/types/pos-partial-return";
 import { PosCatalog } from "./catalog";
 import { PosCart } from "./cart";
 import { PosCustomer } from "./customer";
 import { PosPayment } from "./payment";
+import { PosPartialReturn, type PartialReturnOption } from "./partial-return";
 import { PosCashReversal } from "./reversal";
 import { PosReceiptSuccess, type PosReceiptView } from "./receipt";
 import { PosShiftControl } from "./shift-control";
@@ -35,10 +37,12 @@ export default async function PosWorkspacePage({
 
   const organizationId = profile.organization_id;
   const db = asPosClient(supabase);
+  const partialDb = asPosPartialReturnClient(supabase);
   const canCreateSale = permissionCodes.includes("SALES_CREATE");
   const canManageShift = permissionCodes.includes("POS_SHIFT_MANAGE");
   const canCapturePayment = permissionCodes.includes("POS_PAYMENT_CAPTURE");
   const canVoidSale = permissionCodes.includes("SALES_VOID");
+  const canReturnSale = permissionCodes.includes("SALES_RETURN");
 
   const [terminalResult, shiftResult, salesResult, receiptResult] = await Promise.all([
     organizationId
@@ -83,6 +87,43 @@ export default async function PosWorkspacePage({
     issuedAt: receiptData.issued_at,
   } : null;
 
+  const recentSaleIds = recentSales.map((sale) => sale.id);
+  const partialReturnOptionsBySale = new Map<string, PartialReturnOption[]>();
+  if (recentSaleIds.length > 0) {
+    const [recentLineResult, returnedLineResult] = await Promise.all([
+      db.from("sales_transaction_lines")
+        .select("id,sales_transaction_id,line_no,description,quantity")
+        .in("sales_transaction_id", recentSaleIds)
+        .order("line_no"),
+      partialDb.from("pos_partial_return_lines")
+        .select("original_sales_transaction_id,original_sales_transaction_line_id,quantity")
+        .in("original_sales_transaction_id", recentSaleIds),
+    ]);
+
+    const returnedByLine = new Map<string, number>();
+    for (const returned of returnedLineResult.data ?? []) {
+      returnedByLine.set(
+        returned.original_sales_transaction_line_id,
+        (returnedByLine.get(returned.original_sales_transaction_line_id) ?? 0) + Number(returned.quantity),
+      );
+    }
+
+    for (const line of recentLineResult.data ?? []) {
+      const quantity = Number(line.quantity);
+      const returnedQuantity = returnedByLine.get(line.id) ?? 0;
+      const option: PartialReturnOption = {
+        id: line.id,
+        description: line.description,
+        quantity,
+        returnedQuantity,
+        remainingQuantity: Math.max(0, quantity - returnedQuantity),
+      };
+      const current = partialReturnOptionsBySale.get(line.sales_transaction_id) ?? [];
+      current.push(option);
+      partialReturnOptionsBySale.set(line.sales_transaction_id, current);
+    }
+  }
+
   const activeTerminals = terminals.filter((terminal) => terminal.status === "ACTIVE");
   const activeShifts = shifts.filter((shift) => ACTIVE_SHIFT_STATES.includes(shift.status));
   const ownActiveShift = activeShifts.find((shift) => shift.cashier_profile_id === profile.id);
@@ -97,6 +138,7 @@ export default async function PosWorkspacePage({
   const terminalReady = Boolean(selectedTerminal && selectedTerminal.status === "ACTIVE");
   const permissionReady = canCreateSale && canCapturePayment;
   const canUseCashReversal = canVoidSale && canManageShift && Boolean(ownOpenShift);
+  const canUsePartialReturn = canReturnSale && canManageShift && Boolean(ownOpenShift);
   let catalogItems: PosCatalogItem[] = [];
   let catalogReadError = false;
   let activeSale: {
@@ -309,6 +351,7 @@ export default async function PosWorkspacePage({
             <div className="check-item"><span>Keranjang server-side</span><span className={`check-state ${cartReady ? "" : "pending"}`}>{cartReady ? "AKTIF" : "SIAP DIGUNAKAN"}</span></div>
             <div className="check-item"><span>Pembayaran Tunai + Stock + Journal + Receipt</span><span className="check-state">AKTIF</span></div>
             <div className="check-item"><span>Izin Void / Refund Tunai</span><span className={`check-state ${canVoidSale ? "" : "pending"}`}>{canVoidSale ? "AKTIF" : "DIKUNCI POLICY"}</span></div>
+            <div className="check-item"><span>Izin Partial Return / Refund</span><span className={`check-state ${canReturnSale ? "" : "pending"}`}>{canReturnSale ? "AKTIF" : "DIKUNCI POLICY"}</span></div>
             <div className="check-item"><span>QRIS / Transfer provider</span><span className="check-state pending">BELUM AKTIF</span></div>
           </div>
         </article>
@@ -322,26 +365,37 @@ export default async function PosWorkspacePage({
           </div>
           {recentSales.length > 0 ? (
             <div className="pos-recent-sales">
-              {recentSales.map((sale) => (
-                <div className="pos-recent-sale" key={sale.id}>
-                  <span>
-                    <strong>{sale.sale_number ?? "Transaksi"}</strong>
-                    <small>{new Date(sale.created_at).toLocaleString("id-ID")} · {sale.sync_status}</small>
-                  </span>
-                  <span>
-                    <strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: sale.currency || "IDR", maximumFractionDigits: 0 }).format(sale.total_amount)}</strong>
-                    <small>{sale.status}</small>
-                    <PosCashReversal
-                      saleId={sale.id}
-                      saleNumber={sale.sale_number}
-                      totalAmount={Number(sale.total_amount)}
-                      currency={sale.currency || "IDR"}
-                      refundShiftId={ownOpenShift?.id ?? null}
-                      canReverse={Boolean(canUseCashReversal && sale.status === "COMPLETED")}
-                    />
-                  </span>
-                </div>
-              ))}
+              {recentSales.map((sale) => {
+                const returnLines = partialReturnOptionsBySale.get(sale.id) ?? [];
+                const hasPartialReturn = returnLines.some((line) => line.returnedQuantity > 0);
+                return (
+                  <div className="pos-recent-sale" key={sale.id}>
+                    <span>
+                      <strong>{sale.sale_number ?? "Transaksi"}</strong>
+                      <small>{new Date(sale.created_at).toLocaleString("id-ID")} · {sale.sync_status}</small>
+                    </span>
+                    <span>
+                      <strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: sale.currency || "IDR", maximumFractionDigits: 0 }).format(sale.total_amount)}</strong>
+                      <small>{sale.status}</small>
+                      <PosCashReversal
+                        saleId={sale.id}
+                        saleNumber={sale.sale_number}
+                        totalAmount={Number(sale.total_amount)}
+                        currency={sale.currency || "IDR"}
+                        refundShiftId={ownOpenShift?.id ?? null}
+                        canReverse={Boolean(canUseCashReversal && sale.status === "COMPLETED" && !hasPartialReturn)}
+                      />
+                      <PosPartialReturn
+                        saleId={sale.id}
+                        saleNumber={sale.sale_number}
+                        refundShiftId={ownOpenShift?.id ?? null}
+                        canReturn={Boolean(canUsePartialReturn && sale.status === "COMPLETED")}
+                        lines={returnLines}
+                      />
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="empty-state">Belum ada transaksi DEVELOPMENT. Sistem tidak menampilkan omzet atau struk palsu.</div>
