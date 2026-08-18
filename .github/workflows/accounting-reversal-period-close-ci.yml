@@ -6,14 +6,18 @@ on:
       - main
     paths:
       - 'database/migrations/**accounting_manual_reversal_period_close.sql'
+      - 'database/migrations/**accounting_reversal_close_acl_hardening.sql'
       - 'database/tests/accounting_reversal_period_close.sql'
+      - 'database/tests/accounting_reversal_period_close_acl.sql'
       - '.github/workflows/accounting-reversal-period-close-ci.yml'
   push:
     branches:
       - main
     paths:
       - 'database/migrations/**accounting_manual_reversal_period_close.sql'
+      - 'database/migrations/**accounting_reversal_close_acl_hardening.sql'
       - 'database/tests/accounting_reversal_period_close.sql'
+      - 'database/tests/accounting_reversal_period_close_acl.sql'
       - '.github/workflows/accounting-reversal-period-close-ci.yml'
 
 permissions:
@@ -50,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s database/tests/accounting_reversal_period_close.sql
+          test -s database/tests/accounting_reversal_period_close_acl.sql
           WORKDIR="$RUNNER_TEMP/kdkmp-accounting-reversal-close-ci"
           rm -rf "$WORKDIR"
           mkdir -p "$WORKDIR"
@@ -72,6 +77,12 @@ jobs:
         run: |
           set -euo pipefail
           psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/accounting_reversal_period_close.sql
+
+      - name: Assert private helper ACL boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/accounting_reversal_period_close_acl.sql
 
       - name: Stop local Supabase
         if: always()
