@@ -1,6 +1,6 @@
 import { requirePermission } from "@/lib/auth/permissions";
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { asFinancialProductClient } from "@/types/financial-products";
+import { getFinancialProductsDashboardSnapshot } from "@/lib/financial-products/dashboard-snapshot";
 import { createFinancialProductDraftAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -21,43 +21,18 @@ export default async function FinancialProductsPage({
   searchParams: Promise<{ error?: string; success?: string }>;
 }) {
   await requirePermission("FINANCIAL_PRODUCT_VIEW");
-  const { profile, permissionCodes, supabase } = await requireAccessContext();
-  const db = asFinancialProductClient(supabase);
+  const { permissionCodes, supabase } = await requireAccessContext();
   const params = await searchParams;
-  const organizationId = profile.organization_id;
   const canCreate = permissionCodes.includes("FINANCIAL_PRODUCT_CREATE");
   const canEditDraft = permissionCodes.includes("FINANCIAL_PRODUCT_EDIT_DRAFT");
   const canApprove = permissionCodes.includes("FINANCIAL_PRODUCT_APPROVE");
 
-  const [templatesResult, productsResult, versionsResult, authResult] = await Promise.all([
-    db.from("financial_product_templates")
-      .select("id,code,name,product_category,description,default_configuration,template_status")
-      .eq("template_status", "ACTIVE")
-      .order("product_category")
-      .order("name"),
-    organizationId
-      ? db.from("financial_products")
-          .select("id,code,name,product_category,template_code,legal_product_type,purpose_code,status,organization_unit_id,created_at")
-          .eq("organization_id", organizationId)
-          .order("created_at", { ascending: false })
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("financial_product_versions")
-          .select("id,financial_product_id,version_no,status,accounting_mapping_status,regulatory_validation_status,legal_basis,created_at")
-          .eq("organization_id", organizationId)
-          .order("version_no", { ascending: false })
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("regulatory_authorizations")
-          .select("id,module_code,organization_unit_id,status,effective_date,expiry_date")
-          .eq("organization_id", organizationId)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
+  const { data: snapshot, error: snapshotError } = await getFinancialProductsDashboardSnapshot(supabase);
+  if (snapshotError || !snapshot) {
+    return <section className="panel"><h3>Data produk finansial belum dapat dimuat</h3><p className="panel-subtitle">Snapshot produk gagal dibaca. Tidak ada fallback lintas-scope yang digunakan.</p></section>;
+  }
 
-  const templates = templatesResult.data ?? [];
-  const products = productsResult.data ?? [];
-  const versions = versionsResult.data ?? [];
-  const authorizations = authResult.data ?? [];
+  const { templates, products, versions, authorizations } = snapshot;
   const latestVersion = new Map<string, (typeof versions)[number]>();
   for (const version of versions) {
     if (!latestVersion.has(version.financial_product_id)) latestVersion.set(version.financial_product_id, version);
