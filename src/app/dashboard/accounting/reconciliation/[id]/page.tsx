@@ -5,14 +5,20 @@ import { requirePermission } from "@/lib/auth/permissions";
 
 export const dynamic = "force-dynamic";
 
+type Run = { id:string; reconciliation_type:string; as_of_date:string; subledger_amount:number|null; gl_amount:number|null; difference_amount:number|null; status:string; generated_at:string; reviewed_at:string|null; notes:string|null };
+type ExceptionRow = { id:string; exception_code:string; description:string; amount:number|null; status:string; resolution_notes:string|null; created_at:string; resolved_at:string|null };
+type QueryResult<T> = { data:T; error:{message:string}|null };
+type QueryChain<T> = { eq:(column:string,value:string)=>QueryChain<T>; order:(column:string,options:{ascending:boolean})=>QueryChain<T>; limit:(count:number)=>Promise<QueryResult<T[]>>; maybeSingle:()=>Promise<QueryResult<T|null>> };
+type ReconciliationClient = { from:(table:"reconciliation_runs"|"reconciliation_exceptions")=>{ select:(columns:string)=>QueryChain<Run|ExceptionRow> } };
+
 export default async function ReconciliationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requirePermission("ACCOUNTING_VIEW");
   const { id } = await params;
   const { supabase } = await requireAccessContext();
-  const [{ data: run, error: runError }, { data: exceptions, error: exceptionsError }] = await Promise.all([
-    supabase.from("reconciliation_runs").select("id,reconciliation_type,as_of_date,subledger_amount,gl_amount,difference_amount,status,generated_at,reviewed_at,notes").eq("id", id).maybeSingle(),
-    supabase.from("reconciliation_exceptions").select("id,exception_code,description,amount,status,resolution_notes,created_at,resolved_at").eq("reconciliation_run_id", id).order("created_at", { ascending: true }).limit(200),
-  ]);
+  const client = supabase as unknown as ReconciliationClient;
+  const runQuery = client.from("reconciliation_runs").select("id,reconciliation_type,as_of_date,subledger_amount,gl_amount,difference_amount,status,generated_at,reviewed_at,notes").eq("id", id).maybeSingle() as Promise<QueryResult<Run|null>>;
+  const exceptionQuery = client.from("reconciliation_exceptions").select("id,exception_code,description,amount,status,resolution_notes,created_at,resolved_at").eq("reconciliation_run_id", id).order("created_at", { ascending: true }).limit(200) as Promise<QueryResult<ExceptionRow[]>>;
+  const [{ data: run, error: runError }, { data: exceptions, error: exceptionsError }] = await Promise.all([runQuery, exceptionQuery]);
   if (runError || exceptionsError || !run) notFound();
   const rows = exceptions ?? [];
   return <>
