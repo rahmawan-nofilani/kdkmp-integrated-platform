@@ -1,45 +1,18 @@
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
-import { asAccountingClient } from "@/types/accounting";
+import { getAccountingDashboardSnapshot } from "@/lib/accounting/dashboard-snapshot";
 
 export const dynamic = "force-dynamic";
 
 export default async function AccountingPage() {
   await requirePermission("ACCOUNTING_VIEW");
-  const { profile, permissionCodes, supabase } = await requireAccessContext();
-  const db = asAccountingClient(supabase);
-  const organizationId = profile.organization_id;
+  const { permissionCodes, supabase } = await requireAccessContext();
+  const { data: snapshot, error: snapshotError } = await getAccountingDashboardSnapshot(supabase);
+  if (snapshotError || !snapshot) {
+    return <section className="panel"><h3>Data accounting belum dapat dimuat</h3><p className="panel-subtitle">Snapshot accounting gagal dibaca. Tidak ada fallback lintas-scope yang digunakan.</p></section>;
+  }
 
-  const [accountsResult, periodsResult, journalsResult, eventsResult, mappingsResult, reconciliationsResult, controlMappingsResult] = await Promise.all([
-    organizationId
-      ? db.from("accounting_accounts").select("id,code,name,account_class,normal_balance,is_posting,is_control_account,control_purpose,status,notes").eq("organization_id", organizationId).order("code")
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("accounting_periods").select("id,period_code,period_name,start_date,end_date,status").eq("organization_id", organizationId).order("start_date", { ascending: false }).limit(24)
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("journal_entries").select("id,journal_number,entry_date,description,source_domain,status,posted_at").eq("organization_id", organizationId).order("entry_date", { ascending: false }).limit(20)
-      : Promise.resolve({ data: [], error: null }),
-    db.from("accounting_event_definitions").select("id,event_code,domain,name,status").order("domain").order("event_code"),
-    organizationId
-      ? db.from("accounting_event_mappings").select("id,event_definition_id,version_no,status,effective_from,effective_until").eq("organization_id", organizationId)
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("reconciliation_runs").select("id,reconciliation_type,as_of_date,subledger_amount,gl_amount,difference_amount,status,generated_at").eq("organization_id", organizationId).order("generated_at", { ascending: false }).limit(20)
-      : Promise.resolve({ data: [], error: null }),
-    organizationId
-      ? db.from("subledger_control_accounts").select("id,subledger_code,control_account_id,status,effective_from").eq("organization_id", organizationId)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  const accounts = accountsResult.data ?? [];
-  const periods = periodsResult.data ?? [];
-  const journals = journalsResult.data ?? [];
-  const events = eventsResult.data ?? [];
-  const mappings = mappingsResult.data ?? [];
-  const reconciliations = reconciliationsResult.data ?? [];
-  const controlMappings = controlMappingsResult.data ?? [];
-
+  const { accounts, periods, journals, events, mappings, reconciliations, control_mappings: controlMappings } = snapshot;
   const postingAccounts = accounts.filter((account) => account.is_posting);
   const controlAccounts = accounts.filter((account) => account.is_control_account);
   const openPeriods = periods.filter((period) => period.status === "OPEN");
