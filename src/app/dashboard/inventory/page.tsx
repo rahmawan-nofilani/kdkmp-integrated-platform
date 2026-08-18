@@ -1,39 +1,20 @@
 import { requireAccessContext } from "@/lib/auth/access-context";
-import { asInventoryClient } from "@/types/inventory";
+import { getInventoryDashboardSnapshot } from "@/lib/inventory/dashboard-snapshot";
 
 export const dynamic = "force-dynamic";
 
 export default async function InventoryPage() {
-  const { profile, permissionCodes, supabase } = await requireAccessContext();
+  const { permissionCodes, supabase } = await requireAccessContext();
   if (!permissionCodes.includes("INVENTORY_VIEW")) {
     return <section className="panel"><h3>Akses persediaan tidak tersedia</h3><p className="panel-subtitle">Akun tidak memiliki INVENTORY_VIEW.</p></section>;
   }
 
-  const db = asInventoryClient(supabase);
-  const organizationId = profile.organization_id;
-  const [warehousesResult,nodesResult,itemsResult,uomsResult,lotsResult,movementsResult,positionsResult,reservationsResult,countsResult,mappingsResult] = await Promise.all([
-    organizationId ? db.from("warehouses").select("id,code,name,warehouse_type,status,organization_unit_id").eq("organization_id",organizationId).order("code") : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("warehouse_nodes").select("id,warehouse_id,parent_id,node_type,code,name,status").eq("organization_id",organizationId).order("node_type").order("code") : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_items").select("id,sku,name,category_code,base_uom_id,tracking_type,expiry_control,costing_method,picking_policy,status").eq("organization_id",organizationId).order("sku") : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_uoms").select("id,code,name,dimension,decimal_places,status").eq("organization_id",organizationId).order("code") : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_lots").select("id,inventory_item_id,lot_code,expiry_date,status").eq("organization_id",organizationId).order("expiry_date",{ascending:true,nullsFirst:false}).limit(50) : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_movements").select("id,movement_number,movement_type,status,source_domain,source_reference,occurred_at,posted_at").eq("organization_id",organizationId).order("occurred_at",{ascending:false}).limit(50) : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_available_positions").select("warehouse_id,warehouse_node_id,inventory_item_id,lot_id,stock_status,quantity,reserved_quantity,available_to_allocate").eq("organization_id",organizationId).limit(100) : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("stock_reservations").select("id,warehouse_node_id,inventory_item_id,lot_id,quantity,status,expires_at,source_domain").eq("organization_id",organizationId).order("created_at",{ascending:false}).limit(50) : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("stock_count_sessions").select("id,count_number,scope_description,snapshot_at,status,created_at,completed_at").eq("organization_id",organizationId).order("created_at",{ascending:false}).limit(30) : Promise.resolve({data:[],error:null}),
-    organizationId ? db.from("inventory_accounting_event_mappings").select("id,movement_type,accounting_event_code,mapping_status,notes").eq("organization_id",organizationId).order("movement_type") : Promise.resolve({data:[],error:null}),
-  ]);
+  const { data: snapshot, error: snapshotError } = await getInventoryDashboardSnapshot(supabase);
+  if (snapshotError || !snapshot) {
+    return <section className="panel"><h3>Data persediaan belum dapat dimuat</h3><p className="panel-subtitle">Snapshot persediaan gagal dibaca. Tidak ada data fallback lintas-scope yang digunakan.</p></section>;
+  }
 
-  const warehouses=warehousesResult.data??[];
-  const nodes=nodesResult.data??[];
-  const items=itemsResult.data??[];
-  const uoms=uomsResult.data??[];
-  const lots=lotsResult.data??[];
-  const movements=movementsResult.data??[];
-  const positions=positionsResult.data??[];
-  const reservations=reservationsResult.data??[];
-  const counts=countsResult.data??[];
-  const mappings=mappingsResult.data??[];
+  const { warehouses, nodes, items, uoms, lots, movements, positions, reservations, counts, mappings } = snapshot;
   const uomById=new Map(uoms.map((uom)=>[uom.id,uom.code]));
   const nodeById=new Map(nodes.map((node)=>[node.id,node]));
   const itemById=new Map(items.map((item)=>[item.id,item]));
