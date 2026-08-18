@@ -484,7 +484,7 @@ create or replace function public.reconcile_pos_provider_settlement(
 )
 returns table(settlement_batch_id uuid,settlement_status text,journal_entry_id uuid)
 language plpgsql
-security invoker
+security definer
 set search_path to ''
 as $$
 declare
