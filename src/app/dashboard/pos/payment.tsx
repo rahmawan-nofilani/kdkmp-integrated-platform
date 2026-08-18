@@ -98,11 +98,11 @@ export function PosPayment({
               </button>
               <button type="button" disabled>
                 <strong>QRIS</strong>
-                <span>Integrasi resmi belum aktif</span>
+                <span>Backend siap · provider resmi belum dikonfigurasi</span>
               </button>
               <button type="button" disabled>
                 <strong>Transfer</strong>
-                <span>Integrasi resmi belum aktif</span>
+                <span>Backend siap · bank/provider belum dikonfigurasi</span>
               </button>
             </div>
 
@@ -150,7 +150,8 @@ export function PosPayment({
             </button>
 
             <p className="pos-payment-safety">
-              Saat tombol ini berhasil, pembayaran, stok, jurnal, kas POS, dan struk diposting sebagai satu transaksi. Jika salah satu gagal, semuanya dibatalkan.
+              Tunai tetap aktif seperti biasa. QRIS/Transfer tidak dapat dipilih sampai provider resmi, verifikasi signature backend,
+              mapping rekening clearing, dan struktur fee telah dikonfigurasi. Screenshot pelanggan tidak pernah menjadi bukti pembayaran.
             </p>
           </section>
         </div>
