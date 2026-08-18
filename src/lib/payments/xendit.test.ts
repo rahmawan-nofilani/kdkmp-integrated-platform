@@ -17,6 +17,7 @@ function capturePayload(overrides: Record<string, unknown> = {}) {
       status: "SUCCEEDED",
       country: "ID",
       currency: "IDR",
+      business_id: "business-kdkmp-dev",
       payment_id: "py-1402feb0-bb79-47ae-9d1e-e69394d3949c",
       payment_request_id: "pr-1102feb0-bb79-47ae-9d1e-e69394d3949c",
       reference_id: "POS-PAY-6dc650e0-f050-4af0-b44a-48d7aad0bf0a",
@@ -92,6 +93,22 @@ test("rejects unsupported payment channels", () => {
   assert.throws(
     () => parseXenditWebhook(raw),
     (error: unknown) => error instanceof XenditWebhookError && error.code === "XENDIT_CHANNEL_UNSUPPORTED",
+  );
+});
+
+test("rejects reusable/static payment code confirmations for POS", () => {
+  const raw = JSON.stringify(capturePayload({ type: "REUSABLE_PAYMENT_CODE" }));
+  assert.throws(
+    () => parseXenditWebhook(raw),
+    (error: unknown) => error instanceof XenditWebhookError && error.code === "XENDIT_PAYMENT_TYPE_UNSUPPORTED",
+  );
+});
+
+test("rejects disagreement between top-level and payment business id", () => {
+  const raw = JSON.stringify(capturePayload({ business_id: "other-business" }));
+  assert.throws(
+    () => parseXenditWebhook(raw),
+    (error: unknown) => error instanceof XenditWebhookError && error.code === "XENDIT_BUSINESS_MISMATCH",
   );
 });
 

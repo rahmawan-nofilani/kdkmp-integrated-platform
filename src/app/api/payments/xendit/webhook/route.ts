@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  XENDIT_MAX_WEBHOOK_BYTES,
   XENDIT_PROVIDER_CODE,
   XenditWebhookError,
   moneyToMinorUnits,
@@ -37,11 +38,18 @@ export async function POST(request: Request) {
     return reply(401, "PROVIDER_WEBHOOK_UNAUTHORIZED");
   }
 
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > XENDIT_MAX_WEBHOOK_BYTES) {
+    return reply(413, "XENDIT_WEBHOOK_TOO_LARGE");
+  }
+
   let parsed;
   try {
     parsed = parseXenditWebhook(await request.text());
   } catch (error) {
-    if (error instanceof XenditWebhookError) return reply(400, error.code);
+    if (error instanceof XenditWebhookError) {
+      return reply(error.code === "XENDIT_WEBHOOK_TOO_LARGE" ? 413 : 400, error.code);
+    }
     return reply(400, "PROVIDER_WEBHOOK_INVALID");
   }
 

@@ -136,6 +136,12 @@ export function parseXenditWebhook(rawBody: string): XenditWebhookParseResult {
   }
   const data = payload.data;
 
+  if (data.type !== "PAY") {
+    throw new XenditWebhookError("XENDIT_PAYMENT_TYPE_UNSUPPORTED", "POS accepts one-time PAY events only");
+  }
+  if (requiredString(data, "business_id", 100) !== businessId) {
+    throw new XenditWebhookError("XENDIT_BUSINESS_MISMATCH", "payload business identifiers do not match");
+  }
   if (data.status !== "SUCCEEDED") {
     throw new XenditWebhookError("XENDIT_PAYMENT_NOT_SUCCEEDED", "payment.capture must be SUCCEEDED");
   }
