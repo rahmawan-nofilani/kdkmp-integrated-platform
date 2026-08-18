@@ -1,26 +1,19 @@
-# Current Project Status — Post ZC-5K
+# Current Project Status — Post ZC-5K + POS CASH Reversal DEVELOPMENT Apply
 
-Date: 2026-08-14  
+Date: 2026-08-18  
 Repository: `rahmawan-nofilani/kdkmp-integrated-platform`  
 Environment classification: DEVELOPMENT  
-Checkpoint status: READY TO CONTINUE APPLICATION WORK — PRODUCTION CUTOVER NOT AUTHORIZED
+Checkpoint status: APPLICATION WORK CONTINUES — PRODUCTION CUTOVER NOT AUTHORIZED
 
 ## Evidence baseline
 
-- Main checkpoint before this reconciliation: `ec7da67190f43eb4917b6b37039497ee9da662b5`.
-- Checkpoint PR: #103 — ZC-5K final Zero-Cost readiness and operating handoff.
-- Post-merge Application CI: run #185, SUCCESS.
-- Vercel commit status at the checkpoint: SUCCESS.
-- Open pull requests at reconciliation start: 0.
-- Repository inventory at reconciliation start:
-  - 208 tracked files;
-  - 49 database migrations;
-  - 13 GitHub Actions workflows;
-  - 15 architecture documents;
-  - 18 operations documents;
-  - 74 source files.
+- ZC-5K checkpoint PR: #103 — final Zero-Cost readiness and operating handoff.
+- POS CASH Reversal implementation merged through PR #107.
+- Current relevant `main` merge commit: `6cdedc6a500f960598d7ecfe2fe0d133c65ea11b`.
+- POS reversal repository CI gates passed before merge: Application CI, Database Migration CI, Cloudflare OpenNext Build Proof, focused POS Cash Reversal CI, and automatic Vercel PR preview status.
+- Issue #51 remains the parent POS tracker after reopening/reconciliation; it must remain open while verified POS gaps remain.
 
-This file is a repository-status reconciliation only. It does not authorize or perform a database write, deployment, production cutover, resource activation, billing change, or destructive archive action.
+This file is an environment/status reconciliation. It does not authorize a production cutover, paid-service activation, role grant, destructive archive action, provider activation, or any additional database mutation.
 
 ## Detected implemented workstreams
 
@@ -55,14 +48,30 @@ This file is a repository-status reconciliation only. It does not authorize or p
 
 ### POS command slices
 
-- POS-first cashier workspace and mobile quick navigation.
-- Pricing, shift commands, and cash reconciliation.
-- Safe searchable catalog with product, price, and stock read models.
-- Idempotent cart add/update/cancel commands.
-- Server-authoritative cart totals.
-- Atomic cash completion across payment, stock, journal, and receipt.
+Implemented repository/application foundations include:
 
-Issue #51 remains open and must be reconciled against the merged POS slices before any remaining POS work is assumed.
+- POS-first cashier workspace and mobile quick navigation;
+- pricing, shift commands, and cash reconciliation;
+- safe searchable catalog with product, price, and stock read models;
+- idempotent cart add/update/cancel commands;
+- server-authoritative cart totals;
+- atomic CASH_POS completion across payment, stock, journal, cash movement, and receipt;
+- optional member association on POS sales;
+- controlled full CASH_POS completed-sale reversal/void foundation.
+
+PR #107 added the controlled full CASH reversal engine while preserving original sale, receipt, inventory issue, journal, and cash movement as historical evidence.
+
+The canonical migration is:
+
+`database/migrations/20260818023718_pos_cash_reversal_controlled_void.sql`
+
+It was separately authorized and successfully applied to Supabase DEVELOPMENT project `qdxybbcksjivcidsupbd` on 2026-08-18. Post-apply verification confirmed the reversal tables, RPC, trigger, RLS, grants, and fail-closed behavior are present while `SALES_VOID` remains unmapped.
+
+The Supabase connector recorded the applied migration under remote version `20260818035938` with name `20260818023718_pos_cash_reversal_controlled_void`. This metadata difference is explicitly reconciled in:
+
+`database/migration-reconciliations/20260818_pos_cash_reversal.md`
+
+The canonical migration must not be renamed or rewritten, and the already-recorded remote migration history must not be edited solely to make the timestamps equal.
 
 ### Zero-Cost workstream
 
@@ -80,12 +89,17 @@ Detailed decision: `docs/operations/zc5k-final-zero-cost-readiness-handoff.md`.
 ### Vercel
 
 - DEVELOPMENT path remains intact.
-- It is not evidence of a production cutover.
+- Repository integration may create automatic preview/build activity.
+- No manual deployment or production cutover is authorized by this checkpoint.
 
 ### Supabase
 
-- Supabase DEVELOPMENT remains the hot database/auth environment.
+- Supabase DEVELOPMENT project `qdxybbcksjivcidsupbd` remains the hot database/auth environment.
+- POS CASH Reversal schema/RPC is now installed in DEVELOPMENT.
+- `SALES_VOID` remains privileged and has zero baseline role mappings.
 - Existing RLS, scope, audit, capacity, backup, restore, and migration-history controls remain binding.
+- Security Advisor after the POS reversal apply showed no new reversal-specific security finding; the existing leaked-password-protection warning remains separate.
+- Performance Advisor continues to show broad DEVELOPMENT optimization backlog; no immediate performance finding blocks the POS reversal foundation.
 - Production real-data onboarding is not authorized.
 
 ### Cloudflare
@@ -97,51 +111,53 @@ Detailed decision: `docs/operations/zc5k-final-zero-cost-readiness-handoff.md`.
 
 ## Open work requiring reconciliation or owner decision
 
-1. **Issue #58 — Zero-Cost tracker**
-   - Record authenticated dashboard reload behavior.
-   - Record logout/session termination behavior.
-   - Close only after those two owner browser sanity checks are evidenced.
-   - These checks do not change the Cloudflare Free production NO-GO decision.
+1. **Issue #51 — POS Transaction Command Engine**
+   - Full CASH_POS completed-sale reversal backend + DEVELOPMENT migration is complete.
+   - Decide who may hold privileged `SALES_VOID`; do not grant it autonomously.
+   - Add permission-aware Void/Reversal UI only after policy approval.
+   - Complete trusted QRIS/BANK_TRANSFER provider confirmation and reconciliation before non-cash completion is considered operational.
+   - Implement partial return/refund as a separate controlled slice.
+   - Optional offline draft queue/conflict handling remains a later hybrid-client workstream.
 
-2. **Issue #51 — POS Transaction Command Engine**
-   - Map each requirement to PRs #53–#57.
-   - Mark completed items explicitly.
-   - Create separate scoped follow-ups only for verified gaps.
-   - Do not duplicate already-merged POS work.
-
-3. **Issue #31 — Accounting posting SoD**
+2. **Issue #31 — Accounting posting SoD**
    - Define who may draft, validate, post, reverse, and close periods.
    - Keep `ACCOUNTING_POST` unmapped until policy approval.
 
-4. **Issue #32 — Accounting UX**
+3. **Issue #32 — Accounting UX**
    - Remains downstream of the posting-SoD decision.
 
-5. **Issue #19 — Supabase region**
+4. **Issue #19 — Supabase region**
    - Evaluate Singapore-region staging before data volume grows.
    - No migration without backup, verification, and cutover plan.
+
+5. **Issue #58 — Zero-Cost tracker**
+   - Remaining owner/browser sanity evidence can be recorded without changing the Cloudflare Workers Free production NO-GO decision.
 
 6. **Issue #18 — UX feedback**
    - Remains non-blocking backlog after core operational stability.
 
 ## Binding continuation controls
 
-- Preserve branch → PR → CI → merge.
-- Require Database Migration CI for database migrations.
+- Preserve branch -> PR -> CI -> merge.
+- Require Database Migration CI for executable database migrations.
 - Do not rewrite already-applied migration history.
+- Treat `database/migration-reconciliations/` as metadata-only evidence; files there must never be executed as migrations.
 - Do not weaken JWT validation, RLS, RBAC, permission, scope, audit, or accounting controls for performance.
 - Do not onboard production data without an explicit readiness gate.
 - Do not enable paid infrastructure, R2, custom domain, or production cutover without explicit owner authorization.
 - Keep archive operations non-destructive until close, reconciliation, package verification, recovery proof, and separate prune authorization exist.
 - Keep external integrations adapter-based; do not invent government or provider APIs.
 - Do not enable QRIS completion without trusted provider/backend confirmation.
-- Do not autonomously grant critical financial permissions.
+- Do not autonomously grant critical financial permissions, including `SALES_VOID` and `ACCOUNTING_POST`.
 
 ## Safe continuation sequence
 
-1. Merge this project-state reconciliation after Application CI passes.
-2. Complete and record the two remaining owner browser sanity checks for issue #58.
-3. Reconcile issue #51 against PRs #53–#57.
-4. Choose the next application slice from verified gaps and policy gates.
-5. Implement each slice through branch → PR → CI → merge, with separate authorization for remote infrastructure or database mutations.
+1. Merge the repository-only POS reversal migration metadata reconciliation after CI/review.
+2. Decide the `SALES_VOID` ownership policy as a separate owner/security checkpoint.
+3. Implement permission-aware POS Void/Reversal UI through a new branch -> PR -> CI -> merge.
+4. Run an authorized operational DEVELOPMENT smoke only after the role policy is explicit.
+5. Continue Issue #51 with trusted QRIS/BANK_TRANSFER reconciliation and then partial return/refund.
+6. Continue accounting SoD/UX and cross-module operational hardening toward Release 1.
+7. Production readiness and cutover remain separate future gates.
 
 Future application work may continue independently from the Cloudflare production NO-GO decision while all controls above remain in force.
