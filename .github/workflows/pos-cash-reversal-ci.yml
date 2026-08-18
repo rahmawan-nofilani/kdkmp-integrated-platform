@@ -29,7 +29,7 @@ permissions:
 
 concurrency:
   group: pos-cash-reversal-ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   rollback-test:
