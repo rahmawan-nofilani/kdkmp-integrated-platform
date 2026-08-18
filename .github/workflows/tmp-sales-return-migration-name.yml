@@ -1,0 +1,23 @@
+name: Temporary SALES_RETURN migration filename proof
+
+on:
+  push:
+    branches:
+      - agent/pos-sales-return-manager-policy
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Generate migration filename with pinned Supabase CLI
+        run: |
+          npx --yes supabase@2.113.0 --version
+          npx --yes supabase@2.113.0 migration new pos_partial_return_manager_sales_return_policy
+          find supabase/migrations -maxdepth 1 -type f -printf '%f\n' | sort | tail -n 5
