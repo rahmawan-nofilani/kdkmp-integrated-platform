@@ -1,0 +1,91 @@
+name: POS Provider Confirmation CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'database/migrations/**pos_trusted_provider_confirmation_reconciliation_foundation.sql'
+      - 'database/tests/pos_provider_confirmation_fixture.sql'
+      - 'database/tests/pos_provider_confirmation_reconciliation_rollback.sql'
+      - '.github/workflows/pos-provider-confirmation-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'database/migrations/**pos_trusted_provider_confirmation_reconciliation_foundation.sql'
+      - 'database/tests/pos_provider_confirmation_fixture.sql'
+      - 'database/tests/pos_provider_confirmation_reconciliation_rollback.sql'
+      - '.github/workflows/pos-provider-confirmation-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pos-provider-confirmation-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provider-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
+      HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL_VERSION" = "$SUPABASE_CLI_VERSION"
+
+      - name: Prepare isolated migration workspace
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s database/tests/pos_provider_confirmation_fixture.sql
+          test -s database/tests/pos_provider_confirmation_reconciliation_rollback.sql
+          test -s "$HISTORICAL_DEMO_BOOTSTRAP"
+          WORKDIR="$RUNNER_TEMP/kdkmp-pos-provider-ci"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init >/dev/null
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+
+      - name: Start local Supabase and replay migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
+
+      - name: Prepare deterministic POS provider fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_provider_confirmation_fixture.sql
+
+      - name: Exercise trusted confirmation, mismatch, settlement, and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_provider_confirmation_reconciliation_rollback.sql
+
+      - name: Stop local Supabase
+        if: always()
+        shell: bash
+        run: |
+          cd "${{ steps.prepare.outputs.workdir }}" || exit 0
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup || true
