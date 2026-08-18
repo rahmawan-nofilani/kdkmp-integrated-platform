@@ -52,8 +52,12 @@ Authoritative implementation now lives in:
   - minimal local-CI-only posting-account fixture.
 - `database/tests/pos_cash_reversal_rollback.sql`
   - synthetic authenticated full-reversal + idempotent retry + immutability assertions, followed by `ROLLBACK`.
+- `database/tests/pos_cash_reversal_negative.sql`
+  - synthetic fail-closed permission/state/shift/cash/source checks, followed by `ROLLBACK`.
 - `.github/workflows/pos-cash-reversal-ci.yml`
-  - isolated full migration replay and focused rollback execution using pinned Supabase CLI.
+  - isolated full migration replay and focused rollback execution using pinned Supabase CLI; stale PR runs are cancelled to avoid wasting Actions capacity.
+
+The one-time migration-name generator and all review SQL drafts were removed after promotion; the official migration is the sole database source of truth for this slice.
 
 No visible Void/Reversal button is exposed yet because the migration has not been applied to Supabase DEVELOPMENT and role policy has not been approved.
 
@@ -64,31 +68,37 @@ Repository verification completed on 2026-08-18:
 - canonical migration basename generated using Supabase CLI `2.113.0`;
 - official migration added to repository history;
 - full migration chain replay passed in disposable local Supabase through Database Migration CI;
-- Application CI passed after the migration was introduced;
-- Cloudflare OpenNext Build Proof passed after the migration was introduced;
-- focused POS Cash Reversal CI successfully:
-  - replayed the migration chain locally;
-  - prepared only disposable test fixtures;
-  - called `reverse_cash_pos_sale` through an authenticated/RLS path;
-  - produced all seven authoritative reversal result identifiers;
-  - verified `CASH_REFUND`, `RETURN_IN`, reversing journal and refund receipt links;
-  - verified original payment state/allocation transitions;
-  - verified same-key retry returns the same result without a duplicate command;
-  - verified original receipt, inventory header, journal header and cash movement remain unchanged;
-  - rolled all synthetic business test data back.
+- Application CI passed after migration introduction;
+- Cloudflare OpenNext Build Proof passed after migration introduction;
+- focused POS Cash Reversal CI successfully replayed the migration chain and ran both positive and fail-closed rollback suites;
+- positive suite proved all seven result IDs, exact CASH_REFUND, RETURN_IN mirror, reversing journal, refund receipt, original payment/allocation transitions, same-key idempotent retry, immutable original evidence and final rollback;
+- fail-closed suite proved the migration does not map `SALES_VOID` to a baseline role and rejects:
+  1. missing `SALES_VOID`;
+  2. missing `POS_SHIFT_MANAGE`;
+  3. non-COMPLETED sale;
+  4. invalid reversal reason;
+  5. closed refund shift;
+  6. another cashier's shift;
+  7. inactive refund terminal;
+  8. insufficient tracked drawer cash;
+  9. missing original CASH_SALE movement;
+- fail-closed suite also verifies those failures leave no reversal command, sales return, cash refund, or source-sale mutation.
 
-## Remaining verification before any DEVELOPMENT apply
+## Remaining review gates before any DEVELOPMENT apply
 
-The focused positive/idempotency rollback proof is complete. The following fail-closed cases remain explicit review/test gates and must not be assumed complete merely because the positive path passed:
+The core cash-reversal path and primary fail-closed controls are automated. Remaining review cases are deeper source-integrity variants rather than prerequisites that were skipped silently:
 
-- missing `SALES_VOID` / `POS_SHIFT_MANAGE`;
-- non-COMPLETED or non-CASH_POS source transaction;
-- closed, foreign, wrong-scope, or inactive-terminal refund shift;
-- insufficient tracked drawer cash;
-- missing/mismatched original cash, inventory, journal, payment allocation, or receipt links;
-- no OPEN accounting period;
-- invalid reason values;
-- independent second reversal attempt for an already-voided sale.
+- wrong organization/node/unit refund scope;
+- mismatched original payment/cash linkage;
+- missing/mismatched original inventory movement or lines;
+- missing original posted journal or lines;
+- missing/mismatched original payment allocation;
+- missing/mismatched original receipt;
+- no OPEN accounting period on reversal date;
+- note-length/idempotency semantic-conflict variants;
+- second independent reversal attempt after a completed void.
+
+These remain candidates for further CI hardening before operational exposure. A Supabase Security/Performance Advisor review can only be performed meaningfully after a separately authorized DEVELOPMENT apply.
 
 ## Explicit non-scope
 
