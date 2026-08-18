@@ -1,108 +1,74 @@
-# POS CASH Reversal — Repository Test Plan
+# POS CASH Reversal — Verification Plan
 
-Status: repository-only design/test contract. No DEVELOPMENT apply and no deploy are authorized by this document.
+Status: official repository migration exists; positive/idempotent rollback proof is automated. No Supabase DEVELOPMENT apply, manual deploy, merge, or production action is authorized by this document.
 
-## Purpose
+## Test target
 
-Validate the controlled full CASH_POS void flow before the SQL drafts are promoted into a generated Supabase migration.
+All database behavior must be exercised against a disposable local/CI Supabase database reconstructed from the repository migration chain. Synthetic business rows must run inside a transaction and end in `ROLLBACK`.
 
-The test target must be a disposable local/CI Supabase database created from the full repository migration chain. Test business rows must be synthetic and every behavioral test must run inside a transaction that is rolled back.
+The permanent focused workflow is `.github/workflows/pos-cash-reversal-ci.yml`, pinned to Supabase CLI `2.113.0`.
 
-## Required positive scenario
+## Positive rollback proof — automated and passing
 
-Create or reuse the existing synthetic POS fixture, then complete exactly one CASH_POS sale through the same public `complete_cash_pos_sale` command used by the application.
+`database/tests/pos_cash_reversal_rollback.sql` currently proves:
 
-Capture immutable-content fingerprints before reversal for:
+- authenticated/RLS RPC execution with temporary explicit `SALES_VOID` + `POS_SHIFT_MANAGE` grants only inside the disposable transaction;
+- an own OPEN refund shift with adequate tracked drawer cash;
+- a synthetic COMPLETED CASH_POS sale with settled payment, allocation, SALE_ISSUE, posted balanced journal, CASH_SALE and original receipt;
+- `reverse_cash_pos_sale` creates all seven result identifiers:
+  - `sales_return_id`;
+  - refund payment intent ID;
+  - refund payment attempt ID;
+  - RETURN_IN inventory movement ID;
+  - reversing journal ID;
+  - CASH_REFUND movement ID;
+  - refund receipt ID;
+- original sale becomes `VOIDED`;
+- original payment intent/attempt become `REFUNDED`;
+- original payment allocation becomes `REVERSED`;
+- sales return becomes `POSTED`;
+- refund cash movement is exact `OUT`, linked to original CASH_SALE;
+- RETURN_IN header/line mirrors the original inventory issue item/UOM/lot/node/quantity/cost;
+- reversing journal is POSTED, linked to the original journal, mirrors debit/credit, and remains balanced;
+- refund receipt links original sale and original receipt with the exact refund amount;
+- a retry with the same idempotency key returns the same result identifiers and creates only one command;
+- original POS receipt, original inventory header, original journal header, and original cash movement fingerprints remain unchanged;
+- all synthetic business rows are rolled back.
 
-- original sale commercial fields and timestamps except workflow status/updated_at;
-- sales transaction lines;
-- original POS receipt;
-- original SALE_ISSUE movement and its lines;
-- original POSTED journal and its lines;
-- original CASH_SALE movement.
+## Authorization invariants
 
-Grant `SALES_VOID` only inside the disposable test transaction to the synthetic actor used by the test. The repository migration itself must not map `SALES_VOID` to any role.
+The repository migration itself must never map `SALES_VOID` to a role. Test permissions are temporary explicit user grants inside a disposable transaction only.
 
-Open/retain an own OPEN POS shift with enough tracked drawer cash, then call `reverse_cash_pos_sale` with a fixed idempotency key.
-
-The command must produce exactly one of each:
-
-- `sales_returns` row with status `POSTED`;
-- refund `payment_intents` row;
-- refund `payment_attempts` row;
-- `RETURN_IN` inventory movement linked by `reversal_of_movement_id`;
-- reversing POSTED journal linked by `reversal_of_entry_id`;
-- `CASH_REFUND` / `OUT` POS cash movement linked to the original CASH_SALE;
-- `pos_refund_receipts` row linked to original sale and original POS receipt;
-- one `pos_cash_reversal_commands` row containing all result IDs;
-- one audit event `POS_CASH_SALE_VOIDED`.
+Runtime execution requires both `SALES_VOID` and `POS_SHIFT_MANAGE`; the refund shift must belong to the requester, be OPEN, use an ACTIVE terminal, be in the same scope as the source sale, and have sufficient tracked cash.
 
 ## Accounting assertions
 
-The reversing journal must be created through `DRAFT -> VALIDATED -> POSTED` and must post into an accounting period that is OPEN on the reversal date.
-
-For every original journal line, the reversal must contain the same account and exact opposite debit/credit amounts. Sum debit must equal sum credit and be greater than zero.
-
-The original POSTED journal must remain unchanged.
+A reversal journal must be created `DRAFT`, transition through `VALIDATED`, then become `POSTED` in an OPEN accounting period on the reversal date. Every original line must be mirrored on the same account with debit/credit swapped. The original POSTED journal remains immutable.
 
 ## Inventory assertions
 
-The reversal movement must start DRAFT and end POSTED.
+A reversal movement starts `DRAFT` and ends `POSTED`. `RETURN_IN` lines mirror the original `SALE_ISSUE` lines and return stock to the original warehouse node as AVAILABLE. The original issue remains immutable.
 
-Each RETURN_IN line must mirror the exact original SALE_ISSUE line for item, base UOM, lot, warehouse node, quantity, base quantity, and unit cost. The returned stock must enter AVAILABLE at the same warehouse node from which the sale issued it.
+## Cash and payment assertions
 
-The original SALE_ISSUE movement and lines must remain unchanged.
-
-## Cash assertions
-
-The refund must use the requesting actor's own OPEN shift and ACTIVE terminal. Before execution, tracked drawer cash is:
+Tracked drawer cash is:
 
 `opening_cash + POSTED IN movements - POSTED OUT movements`.
 
-The command must reject a refund larger than that tracked amount.
+A successful full CASH void creates exactly one POSTED `CASH_REFUND` / `OUT` equal to the original sale total and linked through `reversal_of_movement_id`. Original settled payment state is not changed until all new reversal legs exist atomically.
 
-A successful refund creates exactly one POSTED `CASH_REFUND` movement with direction `OUT`, amount equal to the original sale total, and `reversal_of_movement_id` equal to the original CASH_SALE movement.
+## Remaining negative/fail-closed matrix
 
-## Payment assertions
-
-The original payment intent/attempt must start `SETTLED` and end `REFUNDED` only after all new reversal legs exist.
-
-The original allocated sale payment allocation must end `REVERSED`.
-
-The refund payment intent/attempt must be CASH_POS, amount equal to the original sale total, and settle only within the same atomic transaction.
-
-## Receipt assertions
-
-The original POS receipt must not be changed.
-
-A new refund receipt must contain a unique refund number, original sale ID, original receipt ID, refund shift/terminal, refund payment references, CASH_REFUND movement ID, amount, currency, reason code, and issued timestamp.
-
-## Sale-state assertions
-
-The original sale is not copied or rewritten. Commercial values, source links, receipt reference, sold/completed timestamps, and lines remain unchanged.
-
-Only the allowed workflow state changes from `COMPLETED` to `VOIDED` plus `updated_at` may change on the original sale.
-
-## Idempotency assertions
-
-Calling the RPC again with the same actor, sale, shift, reason, note, and exact same idempotency key must return the already-created result IDs and create no duplicate financial, inventory, journal, receipt, or audit records.
-
-A second independent idempotency key for the same already-voided sale must fail closed.
-
-Reusing an idempotency key with a different sale, shift, reason, or note must fail with `POS_IDEMPOTENCY_CONFLICT`.
-
-## Required negative scenarios
-
-All must leave zero partial reversal records:
+These cases remain required before any recommendation to expose the feature operationally:
 
 1. actor lacks `SALES_VOID`;
 2. actor lacks `POS_SHIFT_MANAGE`;
 3. sale is not COMPLETED;
-4. sale is not POS/CASH_POS;
-5. refund shift is closed/missing;
+4. source is not a qualifying CASH_POS completion;
+5. refund shift is closed or missing;
 6. refund shift belongs to another cashier;
 7. refund shift is outside sale scope;
-8. terminal is not ACTIVE;
+8. refund terminal is not ACTIVE;
 9. tracked drawer cash is insufficient;
 10. original cash movement is missing/mismatched;
 11. original inventory movement/lines are missing/mismatched;
@@ -110,23 +76,27 @@ All must leave zero partial reversal records:
 13. original payment intent/attempt/allocation are missing/mismatched;
 14. original receipt is missing/mismatched;
 15. no OPEN accounting period exists on reversal date;
-16. reason code/note violates validation rules.
+16. reason code/note violates validation rules;
+17. a second independent reversal key targets a sale already voided/returning;
+18. an idempotency key is reused with different request semantics.
 
-## Rollback proof
+Every negative scenario must prove that no partial refund, stock return, journal, return receipt, or audit success artifact remains.
 
-At the end of each positive/negative test transaction execute ROLLBACK. Persistent DEVELOPMENT or CI fixture counts must return to their baseline.
+## Repository gates
 
-The repository test must never depend on production data and must never contact payment providers.
+Completed:
 
-## Promotion gates
+- canonical migration basename generated with pinned Supabase CLI;
+- migration promoted to `database/migrations/20260818023718_pos_cash_reversal_controlled_void.sql`;
+- full migration-chain replay passed in Database Migration CI;
+- Application CI and OpenNext Build Proof passed after migration introduction;
+- focused positive/idempotent rollback CI passed.
 
-Before promotion from draft SQL into `database/migrations/`:
+Still required before operational exposure:
 
-- generate the canonical migration filename using the project's pinned Supabase CLI, never a hand-invented timestamp;
-- replay the complete migration chain in a disposable database;
-- execute the positive and negative rollback tests above;
-- confirm every new FK has a covering index;
-- run Supabase security/performance advisors and ensure no new security finding is introduced;
-- run Application CI and Database Migration CI on the same reviewed commit.
+- expand automated fail-closed coverage for the negative matrix above;
+- review security/performance advisor impact after an authorized DEVELOPMENT apply;
+- decide by owner/policy who may receive `SALES_VOID`;
+- expose UI only after the database and permission policy are actually available in the target environment.
 
-Only after those gates pass may a separate owner authorization be requested for any Supabase DEVELOPMENT apply. Production and deploy remain separate authorization boundaries.
+Supabase DEVELOPMENT apply, merge, production, payment-provider activation, and manual deploy are separate authorization boundaries.
