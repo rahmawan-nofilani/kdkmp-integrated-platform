@@ -5,6 +5,7 @@ import { PosCatalog } from "./catalog";
 import { PosCart } from "./cart";
 import { PosCustomer } from "./customer";
 import { PosPayment } from "./payment";
+import { PosCashReversal } from "./reversal";
 import { PosReceiptSuccess, type PosReceiptView } from "./receipt";
 import { PosShiftControl } from "./shift-control";
 
@@ -37,6 +38,7 @@ export default async function PosWorkspacePage({
   const canCreateSale = permissionCodes.includes("SALES_CREATE");
   const canManageShift = permissionCodes.includes("POS_SHIFT_MANAGE");
   const canCapturePayment = permissionCodes.includes("POS_PAYMENT_CAPTURE");
+  const canVoidSale = permissionCodes.includes("SALES_VOID");
 
   const [terminalResult, shiftResult, salesResult, receiptResult] = await Promise.all([
     organizationId
@@ -94,6 +96,7 @@ export default async function PosWorkspacePage({
   const shiftReady = Boolean(ownOpenShift);
   const terminalReady = Boolean(selectedTerminal && selectedTerminal.status === "ACTIVE");
   const permissionReady = canCreateSale && canCapturePayment;
+  const canUseCashReversal = canVoidSale && canManageShift && Boolean(ownOpenShift);
   let catalogItems: PosCatalogItem[] = [];
   let catalogReadError = false;
   let activeSale: {
@@ -305,6 +308,7 @@ export default async function PosWorkspacePage({
             <div className="check-item"><span>Katalog harga + stok</span><span className={`check-state ${catalogReady ? "" : "pending"}`}>{catalogReady ? "SIAP" : "BELUM"}</span></div>
             <div className="check-item"><span>Keranjang server-side</span><span className={`check-state ${cartReady ? "" : "pending"}`}>{cartReady ? "AKTIF" : "SIAP DIGUNAKAN"}</span></div>
             <div className="check-item"><span>Pembayaran Tunai + Stock + Journal + Receipt</span><span className="check-state">AKTIF</span></div>
+            <div className="check-item"><span>Izin Void / Refund Tunai</span><span className={`check-state ${canVoidSale ? "" : "pending"}`}>{canVoidSale ? "AKTIF" : "DIKUNCI POLICY"}</span></div>
             <div className="check-item"><span>QRIS / Transfer provider</span><span className="check-state pending">BELUM AKTIF</span></div>
           </div>
         </article>
@@ -327,6 +331,14 @@ export default async function PosWorkspacePage({
                   <span>
                     <strong>{new Intl.NumberFormat("id-ID", { style: "currency", currency: sale.currency || "IDR", maximumFractionDigits: 0 }).format(sale.total_amount)}</strong>
                     <small>{sale.status}</small>
+                    <PosCashReversal
+                      saleId={sale.id}
+                      saleNumber={sale.sale_number}
+                      totalAmount={Number(sale.total_amount)}
+                      currency={sale.currency || "IDR"}
+                      refundShiftId={ownOpenShift?.id ?? null}
+                      canReverse={Boolean(canUseCashReversal && sale.status === "COMPLETED")}
+                    />
                   </span>
                 </div>
               ))}

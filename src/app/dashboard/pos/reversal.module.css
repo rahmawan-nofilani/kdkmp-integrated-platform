@@ -1,0 +1,264 @@
+.trigger {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #efb9bd;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #a01f28;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.trigger:hover {
+  background: #fff0f1;
+}
+
+.backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(3px);
+}
+
+.dialog {
+  width: min(100%, 560px);
+  max-height: min(88vh, 760px);
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid #e4e7ec;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.header span {
+  display: block;
+  margin-bottom: 5px;
+  color: #a01f28;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.header h2 {
+  margin: 0;
+  color: #17202a;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.close {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid #e4e7ec;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #667085;
+  font-size: 23px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.amountCard {
+  display: grid;
+  gap: 5px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.amountCard span,
+.amountCard small {
+  color: #667085;
+  font-size: 11px;
+}
+
+.amountCard strong {
+  color: #17202a;
+  font-size: 25px;
+  letter-spacing: -0.03em;
+}
+
+.warning {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #f2c6c9;
+  border-radius: 11px;
+  background: #fff7f7;
+  color: #862229;
+}
+
+.warning strong {
+  font-size: 12px;
+}
+
+.warning span {
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.field > span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.field select,
+.field textarea {
+  width: 100%;
+  border: 1px solid #d0d5dd;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #17202a;
+  outline: none;
+}
+
+.field select {
+  min-height: 42px;
+  padding: 0 11px;
+}
+
+.field textarea {
+  min-height: 96px;
+  padding: 11px;
+  resize: vertical;
+}
+
+.field select:focus,
+.field textarea:focus {
+  border-color: #8397aa;
+  box-shadow: 0 0 0 4px rgba(19, 38, 58, 0.07);
+}
+
+.field small {
+  justify-self: end;
+  color: #98a2b3;
+  font-size: 10px;
+}
+
+.confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 13px;
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+  background: #fcfcfd;
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.confirmation input {
+  margin-top: 2px;
+}
+
+.error,
+.success {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.error {
+  border: 1px solid #efb9bd;
+  background: #fff5f5;
+  color: #91252b;
+}
+
+.success {
+  border: 1px solid #b8dec9;
+  background: #effaf4;
+  color: #166b43;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.secondary,
+.danger {
+  min-height: 42px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.secondary {
+  border: 1px solid #d0d5dd;
+  background: #ffffff;
+  color: #344054;
+}
+
+.danger {
+  border: 1px solid #9d2028;
+  background: #b4232c;
+  color: #ffffff;
+}
+
+.secondary:disabled,
+.danger:disabled,
+.close:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .dialog {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 18px 24px;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .secondary,
+  .danger {
+    width: 100%;
+  }
+}
