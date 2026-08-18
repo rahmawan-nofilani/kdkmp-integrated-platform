@@ -73,6 +73,14 @@ from public.accounting_accounts aa
 join public.organization_nodes n on n.id=aa.organization_node_id and n.code='DEMO-KDKMP'
 where aa.code='4000' and aa.status='ACTIVE' and aa.is_posting limit 1\gset
 
+-- Store psql-resolved identifiers in transaction-local GUCs so PL/pgSQL blocks never depend on psql interpolation.
+select set_config('accounting.ci.finance_profile_id',:'finance_profile_id',true);
+select set_config('accounting.ci.manager_profile_id',:'manager_profile_id',true);
+select set_config('accounting.ci.poster_profile_id',:'poster_profile_id',true);
+select set_config('accounting.ci.period_id',:'period_id',true);
+select set_config('accounting.ci.debit_account_id',:'debit_account_id',true);
+select set_config('accounting.ci.credit_account_id',:'credit_account_id',true);
+
 -- 1) Finance Officer creates a balanced DRAFT.
 set local role authenticated;
 select set_config('request.jwt.claim.sub','11900000-0000-4000-8000-000000000001',true);
@@ -87,16 +95,21 @@ select public.create_manual_journal_draft(
   'ACC-CI-CREATE-1',
   'ACC-CI-REF-1'
 ) as finance_create_result\gset
-select (:'finance_create_result'::jsonb->>'journal_entry_id') as finance_journal_id\gset
+select set_config('accounting.ci.finance_journal_id',(:'finance_create_result'::jsonb->>'journal_entry_id'),true);
 
 -- Retry is idempotent and does not create another journal.
 do $$
-declare v_result jsonb; begin
+declare
+  v_result jsonb;
+  v_period uuid:=current_setting('accounting.ci.period_id')::uuid;
+  v_debit uuid:=current_setting('accounting.ci.debit_account_id')::uuid;
+  v_credit uuid:=current_setting('accounting.ci.credit_account_id')::uuid;
+begin
   v_result:=public.create_manual_journal_draft(
-    :'period_id'::uuid,current_date,'CI maker-checker journal',
+    v_period,current_date,'CI maker-checker journal',
     jsonb_build_array(
-      jsonb_build_object('account_id',:'debit_account_id'::uuid,'debit',1000,'credit',0,'memo','Debit'),
-      jsonb_build_object('account_id',:'credit_account_id'::uuid,'debit',0,'credit',1000,'memo','Credit')
+      jsonb_build_object('account_id',v_debit,'debit',1000,'credit',0,'memo','Debit'),
+      jsonb_build_object('account_id',v_credit,'debit',0,'credit',1000,'memo','Credit')
     ),'ACC-CI-CREATE-1','ACC-CI-REF-1');
   if coalesce((v_result->>'idempotent_replay')::boolean,false) is not true then
     raise exception 'ACCOUNTING_CREATE_IDEMPOTENT_RETRY_FAILED';
@@ -114,11 +127,11 @@ select public.create_manual_journal_draft(
     jsonb_build_object('account_id',:'credit_account_id'::uuid,'debit',0,'credit',500)
   ),'ACC-CI-CREATE-SELF','ACC-CI-REF-SELF'
 ) as manager_create_result\gset
-select (:'manager_create_result'::jsonb->>'journal_entry_id') as manager_journal_id\gset
+select set_config('accounting.ci.manager_journal_id',(:'manager_create_result'::jsonb->>'journal_entry_id'),true);
 
 do $$ declare v_msg text; begin
   begin
-    perform public.validate_manual_journal(:'manager_journal_id'::uuid,'ACC-CI-VALIDATE-SELF','must fail');
+    perform public.validate_manual_journal(current_setting('accounting.ci.manager_journal_id')::uuid,'ACC-CI-VALIDATE-SELF','must fail');
     raise exception 'expected_ACCOUNTING_MAKER_CHECKER_VIOLATION';
   exception when others then
     get stacked diagnostics v_msg=message_text;
@@ -129,17 +142,17 @@ do $$ declare v_msg text; begin
 end $$;
 
 -- 3) Manager validates Finance draft successfully.
-select public.validate_manual_journal(:'finance_journal_id'::uuid,'ACC-CI-VALIDATE-1','independent checker') as validate_result\gset
+select public.validate_manual_journal(current_setting('accounting.ci.finance_journal_id')::uuid,'ACC-CI-VALIDATE-1','independent checker') as validate_result\gset
 reset role;
 
 do $$
 begin
   if not exists(
     select 1 from public.journal_entries je
-    where je.id=:'finance_journal_id'::uuid
+    where je.id=current_setting('accounting.ci.finance_journal_id')::uuid
       and je.status='VALIDATED'
-      and je.created_by=:'finance_profile_id'::uuid
-      and je.validated_by=:'manager_profile_id'::uuid
+      and je.created_by=current_setting('accounting.ci.finance_profile_id')::uuid
+      and je.validated_by=current_setting('accounting.ci.manager_profile_id')::uuid
       and je.created_by<>je.validated_by
   ) then raise exception 'ACCOUNTING_VALIDATE_STATE_INVALID'; end if;
 end $$;
@@ -149,7 +162,7 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','11900000-0000-4000-8000-000000000002',true);
 do $$ declare v_msg text; begin
   begin
-    perform public.post_manual_journal(:'finance_journal_id'::uuid,'ACC-CI-POST-MANAGER','must fail');
+    perform public.post_manual_journal(current_setting('accounting.ci.finance_journal_id')::uuid,'ACC-CI-POST-MANAGER','must fail');
     raise exception 'expected_ACCOUNTING_POST_DENIED';
   exception when others then
     get stacked diagnostics v_msg=message_text;
@@ -163,7 +176,7 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','11900000-0000-4000-8000-000000000003',true);
 do $$ declare v_msg text; begin
   begin
-    perform public.post_manual_journal(:'finance_journal_id'::uuid,'ACC-CI-POST-POLICY-DENIED','must fail');
+    perform public.post_manual_journal(current_setting('accounting.ci.finance_journal_id')::uuid,'ACC-CI-POST-POLICY-DENIED','must fail');
     raise exception 'expected_ACCOUNTING_POST_POLICY_NOT_ACTIVE';
   exception when others then
     get stacked diagnostics v_msg=message_text;
@@ -191,17 +204,17 @@ insert into public.approval_requests(
   status,current_step_no,completed_at
 )
 select je.organization_id,je.organization_node_id,:'policy_version_id'::uuid,'ACCOUNTING','JOURNAL_ENTRY',
-       je.id,je.journal_number,'ACC-CI-APPROVAL-1',:'finance_profile_id'::uuid,'{}'::jsonb,'{}'::jsonb,
+       je.id,je.journal_number,'ACC-CI-APPROVAL-1',current_setting('accounting.ci.finance_profile_id')::uuid,'{}'::jsonb,'{}'::jsonb,
        'APPROVED',1,now()
-from public.journal_entries je where je.id=:'finance_journal_id'::uuid;
+from public.journal_entries je where je.id=current_setting('accounting.ci.finance_journal_id')::uuid;
 
 -- 6) A third, distinct actor with explicit test-only ACCOUNTING_POST can now post.
 set local role authenticated;
 select set_config('request.jwt.claim.sub','11900000-0000-4000-8000-000000000003',true);
-select public.post_manual_journal(:'finance_journal_id'::uuid,'ACC-CI-POST-1','approved third-actor post') as post_result\gset
+select public.post_manual_journal(current_setting('accounting.ci.finance_journal_id')::uuid,'ACC-CI-POST-1','approved third-actor post') as post_result\gset
 
 do $$ declare v_result jsonb; begin
-  v_result:=public.post_manual_journal(:'finance_journal_id'::uuid,'ACC-CI-POST-1','approved third-actor post');
+  v_result:=public.post_manual_journal(current_setting('accounting.ci.finance_journal_id')::uuid,'ACC-CI-POST-1','approved third-actor post');
   if coalesce((v_result->>'idempotent_replay')::boolean,false) is not true then
     raise exception 'ACCOUNTING_POST_IDEMPOTENT_RETRY_FAILED';
   end if;
@@ -213,22 +226,22 @@ do $$
 begin
   if not exists(
     select 1 from public.journal_entries je
-    where je.id=:'finance_journal_id'::uuid
+    where je.id=current_setting('accounting.ci.finance_journal_id')::uuid
       and je.status='POSTED'
-      and je.created_by=:'finance_profile_id'::uuid
-      and je.validated_by=:'manager_profile_id'::uuid
-      and je.posted_by=:'poster_profile_id'::uuid
+      and je.created_by=current_setting('accounting.ci.finance_profile_id')::uuid
+      and je.validated_by=current_setting('accounting.ci.manager_profile_id')::uuid
+      and je.posted_by=current_setting('accounting.ci.poster_profile_id')::uuid
       and je.created_by<>je.validated_by
       and je.created_by<>je.posted_by
       and je.validated_by<>je.posted_by
   ) then raise exception 'ACCOUNTING_POST_ACTOR_SEPARATION_INVALID'; end if;
 
-  if (select coalesce(sum(debit),0) from public.journal_lines where journal_entry_id=:'finance_journal_id'::uuid)
-     <> (select coalesce(sum(credit),0) from public.journal_lines where journal_entry_id=:'finance_journal_id'::uuid) then
+  if (select coalesce(sum(debit),0) from public.journal_lines where journal_entry_id=current_setting('accounting.ci.finance_journal_id')::uuid)
+     <> (select coalesce(sum(credit),0) from public.journal_lines where journal_entry_id=current_setting('accounting.ci.finance_journal_id')::uuid) then
     raise exception 'ACCOUNTING_POSTED_JOURNAL_NOT_BALANCED';
   end if;
 
-  if (select count(*) from public.audit_logs where entity_id=:'finance_journal_id'::uuid
+  if (select count(*) from public.audit_logs where entity_id=current_setting('accounting.ci.finance_journal_id')::uuid
       and action_code in ('ACCOUNTING_MANUAL_JOURNAL_DRAFT_CREATED','ACCOUNTING_MANUAL_JOURNAL_VALIDATED','ACCOUNTING_MANUAL_JOURNAL_POSTED'))<>3 then
     raise exception 'ACCOUNTING_JOURNAL_AUDIT_TRAIL_INCOMPLETE';
   end if;
