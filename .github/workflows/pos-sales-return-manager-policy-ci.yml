@@ -1,0 +1,83 @@
+name: POS SALES_RETURN Manager Policy CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'database/migrations/**pos_partial_return_manager_sales_return_policy.sql'
+      - 'database/tests/pos_sales_return_manager_policy.sql'
+      - '.github/workflows/pos-sales-return-manager-policy-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'database/migrations/**pos_partial_return_manager_sales_return_policy.sql'
+      - 'database/tests/pos_sales_return_manager_policy.sql'
+      - '.github/workflows/pos-sales-return-manager-policy-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pos-sales-return-manager-policy-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SUPABASE_CLI_VERSION: "2.113.0"
+      LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      HISTORICAL_DEMO_BOOTSTRAP: database/seeds/001_development_demo_organization.sql
+      HISTORICAL_DEMO_FIXTURE_NAME: 20260811100000_ci_historical_demo_bootstrap.sql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL_VERSION" = "$SUPABASE_CLI_VERSION"
+          echo "Using pinned Supabase CLI $ACTUAL_VERSION"
+
+      - name: Prepare isolated migration workspace
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s database/tests/pos_sales_return_manager_policy.sql
+          test -s "$HISTORICAL_DEMO_BOOTSTRAP"
+          WORKDIR="$RUNNER_TEMP/kdkmp-pos-sales-return-manager-policy-ci"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init >/dev/null
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+          cp "$GITHUB_WORKSPACE/$HISTORICAL_DEMO_BOOTSTRAP" "supabase/migrations/$HISTORICAL_DEMO_FIXTURE_NAME"
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+
+      - name: Start local Supabase and replay migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
+
+      - name: Assert MANAGER-only SALES_RETURN mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_sales_return_manager_policy.sql
+
+      - name: Stop local Supabase
+        if: always()
+        shell: bash
+        run: |
+          cd "${{ steps.prepare.outputs.workdir }}" || exit 0
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup || true
