@@ -1,0 +1,108 @@
+/* Global interaction feedback: lightweight, accessible, and zero-JS. */
+:where(a, button, summary, [role="button"]) {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+:where(
+  .primary-button,
+  .secondary-button,
+  .text-link,
+  .logout-button,
+  .mobile-logout-button,
+  .mobile-menu-trigger,
+  .nav-link,
+  .mobile-nav-link
+) {
+  transition:
+    transform 120ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
+}
+
+:where(
+  .primary-button,
+  .secondary-button,
+  .logout-button,
+  .mobile-logout-button,
+  .mobile-menu-trigger,
+  .nav-link:not(.disabled),
+  .mobile-nav-link:not(.disabled)
+):active {
+  transform: translateY(1px) scale(.985);
+}
+
+:where(a, button, summary, input, select, textarea, [role="button"]):focus-visible {
+  outline: 3px solid rgba(19, 38, 58, .22);
+  outline-offset: 2px;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: .56;
+}
+
+.primary-button:disabled:active,
+button:disabled:active,
+[aria-disabled="true"]:active {
+  transform: none;
+}
+
+.metric-card,
+.panel,
+.empty-state,
+.status-pill,
+.check-state,
+.table-badge {
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .secondary-button:hover,
+  .logout-button:hover,
+  .mobile-menu-trigger:hover {
+    border-color: #c6cdd6;
+    box-shadow: 0 4px 12px rgba(16, 24, 40, .06);
+  }
+
+  .text-link:hover {
+    text-decoration-thickness: 2px;
+  }
+
+  .metric-card:hover,
+  .panel:hover {
+    border-color: #d7dce2;
+    box-shadow: 0 5px 18px rgba(16, 24, 40, .045);
+  }
+}
+
+.mobile-menu[open] .mobile-menu-panel {
+  transform-origin: top right;
+  animation: kdkmp-menu-in 140ms ease-out both;
+}
+
+@keyframes kdkmp-menu-in {
+  from { opacity: 0; transform: translateY(-5px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Preserve usability for keyboard and motion-sensitive users. */
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within { scroll-behavior: auto; }
+
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
