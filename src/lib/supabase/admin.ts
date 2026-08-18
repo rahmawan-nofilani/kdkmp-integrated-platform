@@ -19,7 +19,7 @@ export function createAdminClient() {
       },
       global: {
         headers: {
-          "X-Client-Info": "kdkmp-provider-webhook/1.0",
+          "X-Client-Info": "kdkmp-server-admin/1.0",
         },
       },
     });
