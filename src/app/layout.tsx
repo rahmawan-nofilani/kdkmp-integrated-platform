@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./interaction-feedback.css";
 import "./manager-command-center.css";
 import "./design-system-v1.css";
 import "./pos-workspace.css";
