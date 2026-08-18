@@ -1,180 +1,242 @@
-# Current Project Status — Post ZC-5K + POS CASH Reversal Operational DEVELOPMENT
+# Current Project Status — Release 1 UAT Readiness
 
 Date: 2026-08-18  
 Repository: `rahmawan-nofilani/kdkmp-integrated-platform`  
-Environment classification: DEVELOPMENT  
-Checkpoint status: POS CASH REVERSAL OPERATIONAL FOUNDATION COMPLETE — PRODUCTION CUTOVER NOT AUTHORIZED
+Environment classification: **DEVELOPMENT**  
+Production cutover: **NOT AUTHORIZED**
 
-## Evidence baseline
+## Executive checkpoint
 
-- ZC-5K checkpoint PR: #103 — final Zero-Cost readiness and operating handoff.
-- POS CASH Reversal backend implementation merged through PR #107.
-- Migration-history reconciliation merged through PR #108.
-- Permission-aware Void/Refund UI merged through PR #109 at main commit `a93e5c5165ebf7dccc9411c4463aa0629c98fb69`.
-- Supabase DEVELOPMENT project: `qdxybbcksjivcidsupbd`.
-- Issue #51 remains the parent POS tracker because non-cash confirmation/reconciliation and partial returns are still open.
+KDKMP has moved from foundation-building into **Release 1 UAT preparation**. Core CASH POS financial flows, controlled reversals/returns, Accounting segregation of duties, manual journal posting/reversal/period-close, Accounting UX, and global interaction feedback are implemented and CI-proven.
 
-This file records DEVELOPMENT state only. It does not authorize production cutover, paid-service activation, provider activation, destructive archive action, or new critical financial permissions beyond the explicitly approved MANAGER-only `SALES_VOID` policy.
+The next major milestone is one deliberate DEVELOPMENT deployment followed by role-by-role UAT. Real QRIS/BANK_TRANSFER operation remains intentionally blocked until Xendit credentials, merchant/commercial terms, provider configuration, and accounting clearing mappings are explicitly authorized.
 
-## Detected implemented workstreams
+Canonical UAT plan: `docs/operations/release1-uat-readiness.md`.
 
-### Architecture and access foundation
+## Current repository checkpoint
 
-- Architecture baseline and modular-monolith direction.
-- Supabase DEVELOPMENT environment separation.
-- Identity and organization hierarchy.
-- Baseline roles and permissions.
-- Permission-resolution and hierarchical data-scope engines.
-- Controlled first-manager bootstrap.
-- Secure login, session, and protected application shell.
-- Manager command center and scoped control views.
+Recent completed milestones:
 
-### Cooperative and financial foundation
+- PR #114 — fail-closed Xendit webhook adapter foundation.
+- PR #115–#119 — Zero-Cost dashboard/read-path optimizations, including Accounting snapshot consolidation.
+- PR #120 — controlled manual journal command engine.
+- PR #121 — BOARD-only `ACCOUNTING_POST` SoD + controlled `JOURNAL_POST` approval.
+- PR #122 — controlled manual journal reversal + period close.
+- PR #123 — reversal/period-close private helper ACL hardening.
+- PR #124 — Accounting reversal wizard + period-close checklist.
+- PR #125 — multi-line journal editor + reconciliation drill-down.
+- PR #126 — Accounting discoverability + loading feedback.
+- PR #127 — global interaction feedback + reduced-motion hardening.
 
-- Cooperative core and membership.
-- Membership finance ledger foundation.
-- Configurable financial product builder.
-- Accounting foundation with COA, periods, journal controls, and reconciliation.
-- Approval and segregation-of-duties foundation.
-- Savings, loans, KYC, and ledger foundations.
-- Teller and payment orchestration foundation.
+Issue #31 (Accounting SoD) is completed.  
+Issue #32 (Accounting richer UX) is completed.  
+Issue #18 (global UX feedback/micro-interactions) is completed.
 
-### Operational foundation
+## Implemented operational capability
 
-- Inventory and warehouse.
-- Procurement, purchase orders, receiving, GRNI, and three-way match.
-- Commercial and POS foundation.
-- Logistics and distribution, including dispatch, POD, route, and fleet.
-- Operational UI/UX design-system baseline.
+### Architecture, identity, access
 
-### POS command slices
+- secure authentication/session foundation;
+- protected application shell;
+- organization hierarchy and scoped data access;
+- RBAC and privileged-permission resolution;
+- manager bootstrap/control workspace;
+- audit foundations;
+- zero-cost capacity/backup/archive foundations.
 
-Implemented repository/application foundations include:
+### Cooperative and finance foundations
 
-- POS-first cashier workspace and mobile quick navigation;
-- pricing, shift commands, and cash reconciliation;
-- safe searchable catalog with product, price, and stock read models;
-- idempotent cart add/update/cancel commands;
-- server-authoritative cart totals;
-- atomic CASH_POS completion across payment, stock, journal, cash movement, and receipt;
-- optional member association on POS sales;
-- controlled full CASH_POS completed-sale reversal/void;
-- permission-aware Void/Refund confirmation UI with reason and audit note capture.
+- cooperative/member foundation;
+- membership finance ledger foundation;
+- savings/loan/product configuration foundations;
+- teller/payment orchestration foundations;
+- Accounting COA, periods, journal, reconciliation, approvals, and SoD controls.
 
-PR #107 added the controlled full CASH reversal engine while preserving original sale, receipt, inventory issue, journal, and cash movement as historical evidence.
+### Inventory / procurement / logistics
 
-The canonical reversal migration is:
+- inventory and warehouse foundations;
+- procurement, PO, receiving, GRNI and three-way-match foundations;
+- logistics/distribution foundations including dispatch/POD/route/fleet structures.
 
-`database/migrations/20260818023718_pos_cash_reversal_controlled_void.sql`
+### POS CASH
 
-It was separately authorized and successfully applied to Supabase DEVELOPMENT on 2026-08-18. Post-apply verification confirmed reversal tables, RPC, trigger, RLS, grants, and fail-closed behavior.
+Operational foundations include:
 
-The Supabase connector recorded that applied migration under remote version `20260818035938` with name `20260818023718_pos_cash_reversal_controlled_void`. This metadata difference is explicitly reconciled in:
+- cashier-first workspace and mobile navigation;
+- active shift and terminal controls;
+- searchable scoped catalog;
+- server-authoritative cart pricing/totals;
+- idempotent cart commands;
+- optional member/customer association;
+- atomic CASH sale completion;
+- payment SETTLED;
+- inventory SALE_ISSUE;
+- POSTED accounting journal;
+- POS cash movement;
+- authoritative receipt;
+- completed-sale full CASH reversal/void;
+- controlled partial item return/refund;
+- append-only financial/inventory/accounting history.
 
-`database/migration-reconciliations/20260818_pos_cash_reversal.md`
+Baseline privileged POS policy:
 
-The canonical migration must not be renamed or rewritten, and the already-recorded remote migration history must not be edited solely to force timestamp equality.
+- `SALES_VOID`: MANAGER only;
+- `SALES_RETURN`: MANAGER only;
+- CASHIER receives neither permission.
 
-Owner policy subsequently approved `SALES_VOID` for baseline role `MANAGER` only. DEVELOPMENT verification confirmed:
+### POS non-cash foundation
 
-- `MANAGER` has exactly one baseline `SALES_VOID` role mapping;
-- `CASHIER` has zero `SALES_VOID` mappings;
-- every other baseline role has zero `SALES_VOID` mappings;
-- `SALES_VOID` remains privileged;
-- Manager permission smoke reaches business validation after passing `ACTIVE_PROFILE`, `SALES_VOID`, and `POS_SHIFT_MANAGE` gates;
-- smoke activity left zero reversal command and zero refund-receipt artifacts.
+Implemented but intentionally inactive operationally:
 
-The repository-controlled policy migration is:
+- provider-neutral trusted confirmation engine;
+- service-role-only provider confirmation;
+- idempotent/replay-safe provider event handling;
+- `SETTLEMENT_PENDING` clearing-account model;
+- settlement reconciliation, mismatch exception, and fee-journal foundation;
+- fail-closed Xendit webhook adapter foundation for QRIS / selected VA mapping.
 
-`database/migrations/20260818044251_pos_cash_reversal_manager_sales_void_policy.sql`
+Not activated:
 
-Focused CI includes a dedicated MANAGER-only policy assertion before the legacy fail-closed matrix.
+- Xendit credentials/business ID/callback token;
+- real provider config;
+- provider fee/MDR contract;
+- final clearing/bank/fee accounting mappings;
+- QRIS/BANK_TRANSFER payment UI completion.
 
-### Zero-Cost workstream
+Screenshot/manual cashier input is never accepted as proof of non-cash payment.
 
-- ZC-1 architecture baseline: COMPLETE.
-- ZC-2 capacity monitoring: COMPLETE.
-- ZC-3 backup foundation: COMPLETE.
-- ZC-4 non-destructive archive foundation: COMPLETE FOR FOUNDATION.
-- ZC-5 Cloudflare DEVELOPMENT pilot: COMPLETE.
-- ZC-6 production cutover decision: COMPLETE — NO-GO for the current full-stack SSR architecture on Cloudflare Workers Free.
+## Accounting operational state
 
-Detailed decision: `docs/operations/zc5k-final-zero-cost-readiness-handoff.md`.
+Release-1 SoD is now:
 
-## Current environment position
+- `FINANCE_OFFICER` = Maker / DRAFT and manual reversal DRAFT;
+- `MANAGER` = Checker / VALIDATE and period SOFT_CLOSE;
+- `BOARD` = Authorize + POST and period HARD_CLOSE;
+- `SUPERVISOR` = read/review/audit only.
 
-### Vercel
+Controls include:
 
-- Project `kdkmp-development` remains the active DEVELOPMENT application path.
-- PR #109 UI preview passed and the merge to `main` produced a READY Git deployment for the DEVELOPMENT project.
-- Vercel may label deployments from `main` as target `production` inside the project named `kdkmp-development`; that is not a KDKMP production-environment cutover.
-- Repository integration may create automatic preview/build activity.
+- Maker ≠ Checker ≠ Poster;
+- BOARD authorization required for posting;
+- posting actor binding to authorizing BOARD actor;
+- posted journals immutable;
+- manual reversal is append-only and links to immutable source;
+- non-manual journal reversal remains domain-engine owned;
+- duplicate active reversal blocked;
+- period close blocked by unposted journals, open Accounting approvals, unresolved reconciliation, imbalance, or premature date;
+- Manager soft-close and distinct BOARD hard-close;
+- conflict declaration required for governance actions.
 
-### Supabase
+Accounting UX now includes:
 
-- Supabase DEVELOPMENT project `qdxybbcksjivcidsupbd` remains the hot database/auth environment.
-- POS CASH Reversal schema/RPC is installed in DEVELOPMENT.
-- `SALES_VOID` is approved only for `MANAGER`; `CASHIER` remains denied.
-- Existing RLS, scope, audit, capacity, backup, restore, and migration-history controls remain binding.
-- Security Advisor after the reversal schema apply showed no new reversal-specific security finding; the existing leaked-password-protection warning remains separate.
-- Performance Advisor continues to show broader DEVELOPMENT optimization backlog; no immediate performance finding blocks the reversal foundation.
-- Production real-data onboarding is not authorized.
+- quick two-sided manual journal entry;
+- multi-line journal editor up to 20 lines;
+- live balance/line validation plus authoritative server/database revalidation;
+- journal validation and BOARD authorization/posting;
+- reversal wizard;
+- period-close checklist/actions;
+- reconciliation drill-down + exception register;
+- role-scoped navigation and loading feedback.
+
+## Zero-Cost status
+
+Issue #58 Zero-Cost parent tracker is completed.
+
+Binding conclusions:
+
+- Supabase DEVELOPMENT remains the hot DB/auth platform;
+- Vercel DEVELOPMENT remains the active web application platform;
+- automatic Vercel deployment is intentionally disabled to conserve build/deployment quota;
+- changes are batched before deliberate deployment milestones;
+- Cloudflare/OpenNext compatibility proof remains useful, but current full-stack SSR architecture is **NO-GO for true production on Workers Free** under the strict CPU gate;
+- no paid plan, R2, custom production domain, or automatic upgrade is authorized.
+
+## Environment position
+
+### Supabase DEVELOPMENT
+
+Project: `qdxybbcksjivcidsupbd`  
+Current region: `ap-south-1` (Mumbai).
+
+Applied DEVELOPMENT state includes POS cash completion/reversal/partial return policies, provider-neutral confirmation/reconciliation foundation, Zero-Cost read optimizations, Accounting journal command engine, BOARD posting SoD, controlled reversal/period close, and ACL hardening.
+
+Do not rewrite applied migration history. Remote connector timestamps may differ from canonical repository filenames; reconciled historical metadata remains valid.
+
+### Vercel DEVELOPMENT
+
+Project: `kdkmp-development` (`prj_ITkValMHsXHflGI0qKLHoCgYYB9n`).
+
+Git auto-deploy remains disabled for Zero-Cost conservation. Recent repository milestones therefore may be ahead of the currently online DEVELOPMENT deployment. This is intentional until the deliberate Release-1 UAT deployment is explicitly authorized.
 
 ### Cloudflare
 
-- The DEVELOPMENT compatibility pilot remains useful.
-- The strict Workers Free CPU gate did not pass for the current full-stack SSR architecture.
-- Production promotion on this architecture is not authorized.
-- R2, paid services, custom domain, and production cutover remain outside this checkpoint.
+Compatibility/build proof remains part of CI. It is not an authorization to deploy or cut over production.
 
-## Open work requiring reconciliation or owner decision
+## Open blockers / decisions
 
-1. **Issue #51 — POS Transaction Command Engine**
-   - Full CASH_POS completed-sale reversal backend, DEVELOPMENT schema, Manager-only policy, and permission-aware UI are complete for the operational foundation.
-   - Complete trusted QRIS/BANK_TRANSFER provider confirmation and reconciliation before non-cash completion is considered operational.
-   - Implement partial return/refund as a separate controlled slice.
-   - Optional offline draft queue/conflict handling remains a later hybrid-client workstream; offline final payment confirmation is prohibited.
+### Issue #51 — POS Transaction Command Engine
 
-2. **Issue #31 — Accounting posting SoD**
-   - Define who may draft, validate, post, reverse, and close periods.
-   - Keep `ACCOUNTING_POST` unmapped until policy approval.
+Still open because real non-cash operation is credential/commercial-bound.
 
-3. **Issue #32 — Accounting UX**
-   - Remains downstream of the posting-SoD decision.
+Remaining meaningful work:
 
-4. **Issue #19 — Supabase region**
-   - Evaluate Singapore-region staging before data volume grows.
-   - No migration without backup, verification, and cutover plan.
+- Xendit Test Mode account/credential authorization;
+- bind payment initiation to provider payment request/reference;
+- real sandbox QRIS/VA end-to-end simulation;
+- webhook positive/negative verification with authorized credentials;
+- provider settlement ingest/reconciliation adapter;
+- actual merchant classification + MDR/processing/VAT terms;
+- final clearing/bank/fee account mappings;
+- DEVELOPMENT UI activation only after all gates pass;
+- optional offline draft queue/conflict handling remains later work; offline payment confirmation is prohibited.
 
-5. **Issue #58 — Zero-Cost tracker**
-   - Remaining owner/browser sanity evidence can be recorded without changing the Cloudflare Workers Free production NO-GO decision.
+### Issue #19 — Supabase region / staging architecture
 
-6. **Issue #18 — UX feedback**
-   - Remains non-blocking backlog after core operational stability.
+Current DEVELOPMENT is Mumbai while primary users are in Indonesia. Before staging/data volume grows, evaluate Singapore (`ap-southeast-1`) with:
+
+- backup/restore evidence;
+- complete migration replay;
+- latency comparison;
+- cutover/rollback plan;
+- explicit authorization before moving any data.
+
+No region migration is authorized by this document.
+
+## Release 1 UAT milestone
+
+Repository preparation uses `docs/operations/release1-uat-readiness.md` as the canonical test matrix.
+
+Planned execution:
+
+1. freeze a green `main` SHA;
+2. explicitly authorize one deliberate Vercel DEVELOPMENT deployment;
+3. verify DEVELOPMENT environment integrity;
+4. create/verify distinct UAT actors without weakening RBAC;
+5. execute authentication/scope, POS CASH, return/void, Accounting, inventory/procurement, cooperative/teller, reconciliation/audit, and browser/mobile/accessibility gates;
+6. record P0/P1/P2/P3 defects and evidence;
+7. fix in batched branch → PR → CI → merge cycles;
+8. keep real provider tests marked blocked until provider authorization;
+9. evaluate staging/region only after UAT evidence is stable;
+10. production remains a separate future gate.
+
+## Current readiness estimate
+
+This is an engineering estimate, not a certification:
+
+- Release-1 DEVELOPMENT implementation/readiness: **approximately 93–94%**;
+- true production readiness: **approximately 70–73%**.
+
+The gap is now dominated less by core code and more by UAT evidence, provider activation, staging/region/recovery decisions, and production cutover controls.
 
 ## Binding continuation controls
 
-- Preserve branch -> PR -> CI -> merge.
-- Require Database Migration CI for executable database migrations.
-- Do not rewrite already-applied migration history.
-- Treat `database/migration-reconciliations/` as metadata-only evidence; files there must never be executed as migrations.
-- Do not weaken JWT validation, RLS, RBAC, permission, scope, audit, or accounting controls for performance.
-- Do not onboard production data without an explicit readiness gate.
-- Do not enable paid infrastructure, R2, custom domain, or production cutover without explicit owner authorization.
-- Keep archive operations non-destructive until close, reconciliation, package verification, recovery proof, and separate prune authorization exist.
-- Keep external integrations adapter-based; do not invent government or provider APIs.
-- Do not enable QRIS completion without trusted provider/backend confirmation.
-- `SALES_VOID` baseline policy is MANAGER-only; CASHIER must remain denied unless a future owner decision explicitly changes the segregation-of-duties policy through a new migration.
-- Do not autonomously grant other critical financial permissions such as `ACCOUNTING_POST`.
-
-## Safe continuation sequence
-
-1. Complete repository/CI reconciliation for the MANAGER-only `SALES_VOID` policy.
-2. Reconcile Issue #51 to mark full CASH reversal operational foundation complete.
-3. Continue Issue #51 with trusted QRIS/BANK_TRANSFER confirmation and reconciliation.
-4. Implement controlled partial return/refund as the next POS financial slice.
-5. Continue accounting SoD/UX and cross-module operational hardening toward Release 1.
-6. Continue hybrid local-client work only as a separate workstream; authoritative financial state remains server-owned.
-7. Production readiness and cutover remain separate future gates.
-
-Future application work may continue independently from the Cloudflare production NO-GO decision while all controls above remain in force.
+- Preserve branch → PR → CI → merge.
+- Never write directly to `main`.
+- Require focused/full database CI for executable migrations.
+- Never rewrite already-applied migration history.
+- Do not weaken JWT, RLS, RBAC, scope, audit, Accounting SoD, or provider verification for convenience/performance.
+- Do not expose service-role/provider secrets to browser code.
+- Do not enable real QRIS/BANK_TRANSFER completion without trusted provider credentials + server verification.
+- Do not onboard real production data without explicit readiness approval.
+- Do not create/enable paid resources, custom production infrastructure, or true production without explicit owner authorization.
+- Keep authoritative financial state server-owned; offline final payment confirmation is prohibited.
