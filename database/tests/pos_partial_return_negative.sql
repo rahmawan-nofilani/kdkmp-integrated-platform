@@ -23,7 +23,6 @@ set organization_id=(select id from public.organizations where code='DEMO-KDKMP-
 where auth_user_id in (
   '10810000-0000-4000-8000-000000000001','10810000-0000-4000-8000-000000000002','10810000-0000-4000-8000-000000000003'
 );
-select id as none_profile_id from public.profiles where auth_user_id='10810000-0000-4000-8000-000000000001'\gset
 select id as return_profile_id from public.profiles where auth_user_id='10810000-0000-4000-8000-000000000002'\gset
 select id as full_profile_id from public.profiles where auth_user_id='10810000-0000-4000-8000-000000000003'\gset
 
@@ -93,14 +92,17 @@ do $$ declare v_msg text; begin
 end $$;
 reset role;
 
--- No expected failure may leave partial-return artifacts.
+-- Every expected failure must leave zero partial-return artifacts.
 do $$
 begin
   if exists(select 1 from public.pos_partial_return_commands where idempotency_key like 'PARTIAL-NEG-%') then
     raise exception 'partial_return_negative_left_command';
   end if;
-  if exists(select 1 from public.pos_refund_receipts where refund_number like 'RFD-RET-%' and created_by in (:'none_profile_id'::uuid,:'return_profile_id'::uuid,:'full_profile_id'::uuid)) then
+  if exists(select 1 from public.pos_refund_receipts where payload->>'type'='PARTIAL_RETURN') then
     raise exception 'partial_return_negative_left_refund_receipt';
+  end if;
+  if exists(select 1 from public.pos_partial_return_lines) then
+    raise exception 'partial_return_negative_left_return_lines';
   end if;
 end $$;
 
