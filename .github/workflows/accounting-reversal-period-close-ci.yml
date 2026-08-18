@@ -9,6 +9,7 @@ on:
       - 'database/migrations/**accounting_reversal_close_acl_hardening.sql'
       - 'database/tests/accounting_reversal_period_close.sql'
       - 'database/tests/accounting_reversal_period_close_acl.sql'
+      - 'src/app/dashboard/accounting/**'
       - '.github/workflows/accounting-reversal-period-close-ci.yml'
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - 'database/migrations/**accounting_reversal_close_acl_hardening.sql'
       - 'database/tests/accounting_reversal_period_close.sql'
       - 'database/tests/accounting_reversal_period_close_acl.sql'
+      - 'src/app/dashboard/accounting/**'
       - '.github/workflows/accounting-reversal-period-close-ci.yml'
 
 permissions:
