@@ -1,0 +1,76 @@
+name: POS Xendit Adapter CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/lib/payments/xendit.ts'
+      - 'src/lib/payments/xendit.test.ts'
+      - 'src/lib/supabase/admin.ts'
+      - 'src/app/api/payments/xendit/webhook/route.ts'
+      - 'docs/operations/pos-xendit-adapter-foundation.md'
+      - '.github/workflows/pos-xendit-adapter-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/lib/payments/xendit.ts'
+      - 'src/lib/payments/xendit.test.ts'
+      - 'src/lib/supabase/admin.ts'
+      - 'src/app/api/payments/xendit/webhook/route.ts'
+      - 'docs/operations/pos-xendit-adapter-foundation.md'
+      - '.github/workflows/pos-xendit-adapter-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pos-xendit-adapter-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck application and adapter
+        run: npm run typecheck
+
+      - name: Compile focused adapter test
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/kdkmp-xendit-adapter-test"
+          rm -rf "$OUT"
+          npx tsc \
+            --target ES2022 \
+            --module commonjs \
+            --moduleResolution node \
+            --esModuleInterop \
+            --skipLibCheck \
+            --types node \
+            --outDir "$OUT" \
+            src/lib/payments/xendit.ts \
+            src/lib/payments/xendit.test.ts
+          test -s "$OUT/xendit.js"
+          test -s "$OUT/xendit.test.js"
+
+      - name: Run focused adapter tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test "$RUNNER_TEMP/kdkmp-xendit-adapter-test/xendit.test.js"
