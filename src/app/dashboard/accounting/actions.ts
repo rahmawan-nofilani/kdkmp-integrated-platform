@@ -8,7 +8,7 @@ import { requirePermission } from "@/lib/auth/permissions";
 type RpcResult = { data: unknown; error: { message: string } | null };
 
 type AccountingCommandRpc = (
-  fn: "create_manual_journal_draft" | "validate_manual_journal",
+  fn: "create_manual_journal_draft" | "validate_manual_journal" | "authorize_manual_journal_post" | "post_manual_journal",
   args: Record<string, unknown>,
 ) => Promise<RpcResult>;
 
@@ -21,7 +21,15 @@ function commandError(message: string) {
   if (message.includes("ACCOUNTING_JOURNAL_ACCOUNT_INVALID")) return "account-invalid";
   if (message.includes("ACCOUNTING_JOURNAL_LINES_INVALID")) return "lines-invalid";
   if (message.includes("ACCOUNTING_MAKER_CHECKER_VIOLATION")) return "maker-checker";
+  if (message.includes("ACCOUNTING_MAKER_CHECKER_POSTER_VIOLATION")) return "maker-checker-poster";
   if (message.includes("ACCOUNTING_JOURNAL_NOT_DRAFT")) return "not-draft";
+  if (message.includes("ACCOUNTING_JOURNAL_NOT_VALIDATED")) return "not-validated";
+  if (message.includes("ACCOUNTING_POST_DENIED")) return "post-denied";
+  if (message.includes("ACCOUNTING_POST_APPROVAL_REQUEST_MISSING")) return "approval-missing";
+  if (message.includes("ACCOUNTING_POST_APPROVAL_NOT_OPEN")) return "approval-not-open";
+  if (message.includes("ACCOUNTING_CONFLICT_DECLARATION_REQUIRED")) return "conflict-required";
+  if (message.includes("ACCOUNTING_POST_REASON_REQUIRED")) return "post-reason-required";
+  if (message.includes("ACCOUNTING_POSTER_NOT_AUTHORIZING_BOARD_ACTOR")) return "poster-not-authorizer";
   if (message.includes("ACCOUNTING_IDEMPOTENCY_CONFLICT")) return "idempotency";
   return "system";
 }
@@ -87,4 +95,38 @@ export async function validateManualJournalAction(formData: FormData) {
 
   revalidatePath("/dashboard/accounting");
   redirect("/dashboard/accounting?success=validated");
+}
+
+export async function authorizeAndPostManualJournalAction(formData: FormData) {
+  await requirePermission("ACCOUNTING_POST");
+
+  const journalEntryId = String(formData.get("journal_entry_id") ?? "").trim();
+  const reason = String(formData.get("reason") ?? "").trim();
+  const conflictDeclared = formData.get("conflict_declared") === "on";
+  if (!journalEntryId) redirect("/dashboard/accounting?error=invalid-journal");
+  if (!reason) redirect("/dashboard/accounting?error=post-reason-required");
+  if (!conflictDeclared) redirect("/dashboard/accounting?error=conflict-required");
+
+  const { supabase } = await requireAccessContext();
+  const rpc = commandRpc(supabase);
+  const authorizationKey = `accounting-ui-authorize-${crypto.randomUUID()}`;
+  const postKey = `accounting-ui-post-${crypto.randomUUID()}`;
+
+  const { error: authorizationError } = await rpc("authorize_manual_journal_post", {
+    p_journal_entry_id: journalEntryId,
+    p_idempotency_key: authorizationKey,
+    p_reason: reason,
+    p_conflict_declared: true,
+  });
+  if (authorizationError) redirect(`/dashboard/accounting?error=${commandError(authorizationError.message)}`);
+
+  const { error: postError } = await rpc("post_manual_journal", {
+    p_journal_entry_id: journalEntryId,
+    p_idempotency_key: postKey,
+    p_reason: reason,
+  });
+  if (postError) redirect(`/dashboard/accounting?error=${commandError(postError.message)}`);
+
+  revalidatePath("/dashboard/accounting");
+  redirect("/dashboard/accounting?success=posted");
 }
