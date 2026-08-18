@@ -387,10 +387,10 @@ begin
   v_receipt_number:='RCP-'||to_char(clock_timestamp(),'YYYYMMDD-HH24MISSMS')||'-'||upper(substr(replace(gen_random_uuid()::text,'-',''),1,6));
   insert into public.pos_receipts(
     organization_id,organization_node_id,organization_unit_id,sales_transaction_id,pos_shift_id,terminal_id,payment_intent_id,payment_attempt_id,
-    receipt_number,currency,subtotal,discount_amount,tax_amount,total_amount,cash_received,change_amount,payment_channel,payload,issued_at,created_by
+    receipt_number,currency,subtotal,discount_amount,tax_amount,total_amount,cash_received,payment_channel,payload,issued_at,created_by
   ) values(
     v_sale.organization_id,v_sale.organization_node_id,v_sale.organization_unit_id,v_sale.id,v_sale.pos_shift_id,v_sale.terminal_id,v_intent.id,v_attempt.id,
-    v_receipt_number,v_sale.currency,v_gross,v_discount,v_tax,v_total,null,null,v_attempt.channel,
+    v_receipt_number,v_sale.currency,v_gross,v_discount,v_tax,v_total,null,v_attempt.channel,
     jsonb_build_object('sale_number',v_sale.sale_number,'receipt_number',v_receipt_number,'payment_channel',v_attempt.channel,'provider_code',v_provider.code,'provider_reference',new.provider_reference,'merchant_reference',new.merchant_reference,'lines',v_receipt_lines,'total_cost',round(v_total_cost,2),'issued_at',now()),
     now(),v_sale.created_by
   ) returning id into v_receipt_id;
@@ -644,7 +644,7 @@ begin
     select pa.* from public.payment_attempts pa
     join public.payment_settlement_items psi on psi.payment_attempt_id=pa.id
     where psi.settlement_batch_id=v_batch.id and psi.match_status='MATCHED'
-    for update
+    for update of pa
   loop
     update public.payment_attempts set status='SETTLED',settled_at=now() where id=v_attempt.id and status='SETTLEMENT_PENDING';
     update public.payment_intents set status='SETTLED',settled_at=now(),updated_at=now() where id=v_attempt.payment_intent_id and status='SETTLEMENT_PENDING';
