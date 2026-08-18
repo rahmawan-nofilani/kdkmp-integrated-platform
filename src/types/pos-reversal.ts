@@ -24,7 +24,32 @@ export type PosCashReversalCommandRow = {
   result_inventory_movement_id: string | null;
   result_journal_entry_id: string | null;
   result_cash_movement_id: string | null;
+  result_refund_receipt_id: string | null;
   requested_by: string | null;
+  created_at: string;
+};
+
+export type PosRefundReceiptRow = {
+  id: string;
+  organization_id: string;
+  organization_node_id: string;
+  organization_unit_id: string;
+  sales_return_id: string;
+  original_sales_transaction_id: string;
+  original_receipt_id: string;
+  refund_pos_shift_id: string;
+  terminal_id: string;
+  refund_payment_intent_id: string;
+  refund_payment_attempt_id: string;
+  cash_movement_id: string;
+  refund_number: string;
+  currency: string;
+  refund_amount: number;
+  reason_code: string;
+  reason_note: string | null;
+  payload: unknown;
+  issued_at: string;
+  created_by: string | null;
   created_at: string;
 };
 
@@ -35,6 +60,7 @@ export type CashPosReversalResult = {
   inventory_movement_id: string;
   journal_entry_id: string;
   cash_movement_id: string;
+  refund_receipt_id: string;
 };
 
 type PosReversalFunctions = PosDatabase["public"]["Functions"] & {
@@ -54,6 +80,7 @@ export type PosReversalDatabase = Omit<PosDatabase, "public"> & {
   public: Omit<PosDatabase["public"], "Tables" | "Functions"> & {
     Tables: PosDatabase["public"]["Tables"] & {
       pos_cash_reversal_commands: TableShape<PosCashReversalCommandRow>;
+      pos_refund_receipts: TableShape<PosRefundReceiptRow>;
     };
     Functions: PosReversalFunctions;
   };
