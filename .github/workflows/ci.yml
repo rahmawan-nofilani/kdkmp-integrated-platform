@@ -38,3 +38,63 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_ci_placeholder
         run: npm run build
+
+  deploy-development:
+    if: github.event_name == 'pull_request' && github.head_ref == 'ops/direct-vercel-via-application-ci'
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: team_58pKkL8YiBeenw1FRAYcKsrx
+      VERCEL_PROJECT_ID: prj_ITkValMHsXHflGI0qKLHoCgYYB9n
+      VERCEL_PROJECT_NAME: kdkmp-development
+    steps:
+      - name: Require Vercel token
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "VERCEL_TOKEN repository secret is not configured."
+            exit 2
+          fi
+
+      - name: Deploy GitHub main to Vercel DEVELOPMENT
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          BODY="$(jq -n \
+            --arg name "$VERCEL_PROJECT_NAME" \
+            --arg project "$VERCEL_PROJECT_ID" \
+            '{
+              name: $name,
+              project: $project,
+              target: "production",
+              gitSource: {
+                type: "github",
+                org: "rahmawan-nofilani",
+                repo: "kdkmp-integrated-platform",
+                ref: "main"
+              },
+              withLatestCommit: true,
+              meta: {
+                release: "release1-uat-development",
+                environment_classification: "DEVELOPMENT"
+              }
+            }')"
+
+          RESPONSE="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --url "https://api.vercel.com/v13/deployments?teamId=${VERCEL_ORG_ID}&forceNew=1" \
+            --header "Authorization: Bearer ${VERCEL_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "$BODY")"
+
+          DEPLOYMENT_ID="$(printf '%s' "$RESPONSE" | jq -r '.id // empty')"
+          DEPLOYMENT_URL="$(printf '%s' "$RESPONSE" | jq -r '.url // empty')"
+          DEPLOYMENT_STATUS="$(printf '%s' "$RESPONSE" | jq -r '.status // .readyState // empty')"
+
+          test -n "$DEPLOYMENT_ID"
+          echo "Deployment created: $DEPLOYMENT_ID"
+          echo "URL: $DEPLOYMENT_URL"
+          echo "Initial status: $DEPLOYMENT_STATUS"
