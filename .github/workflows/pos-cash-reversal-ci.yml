@@ -9,6 +9,7 @@ on:
       - 'database/tests/pos_cash_reversal_fixture.sql'
       - 'database/tests/pos_cash_reversal_rollback.sql'
       - 'database/tests/pos_cash_reversal_negative.sql'
+      - 'database/tests/pos_cash_reversal_role_policy.sql'
       - 'src/app/dashboard/pos/reversal-actions.ts'
       - 'src/types/pos-reversal.ts'
       - '.github/workflows/pos-cash-reversal-ci.yml'
@@ -20,6 +21,7 @@ on:
       - 'database/tests/pos_cash_reversal_fixture.sql'
       - 'database/tests/pos_cash_reversal_rollback.sql'
       - 'database/tests/pos_cash_reversal_negative.sql'
+      - 'database/tests/pos_cash_reversal_role_policy.sql'
       - 'src/app/dashboard/pos/reversal-actions.ts'
       - 'src/types/pos-reversal.ts'
       - '.github/workflows/pos-cash-reversal-ci.yml'
@@ -61,6 +63,7 @@ jobs:
           test -s database/tests/pos_cash_reversal_fixture.sql
           test -s database/tests/pos_cash_reversal_rollback.sql
           test -s database/tests/pos_cash_reversal_negative.sql
+          test -s database/tests/pos_cash_reversal_role_policy.sql
           test -s "$HISTORICAL_DEMO_BOOTSTRAP"
           WORKDIR="$RUNNER_TEMP/kdkmp-pos-reversal-ci"
           rm -rf "$WORKDIR"
@@ -78,6 +81,17 @@ jobs:
           set -euo pipefail
           cd "${{ steps.prepare.outputs.workdir }}"
           npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
+
+      - name: Verify approved MANAGER-only SALES_VOID policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v psql >/dev/null 2>&1; then
+            psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_cash_reversal_role_policy.sql
+          else
+            docker run --rm --network host -v "$GITHUB_WORKSPACE:/workspace:ro" -w /workspace postgres:17-alpine \
+              psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_cash_reversal_role_policy.sql
+          fi
 
       - name: Prepare disposable POS reversal fixture
         shell: bash
@@ -99,6 +113,18 @@ jobs:
           else
             docker run --rm --network host -v "$GITHUB_WORKSPACE:/workspace:ro" -w /workspace postgres:17-alpine \
               psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -f database/tests/pos_cash_reversal_rollback.sql
+          fi
+
+      - name: Reset baseline role mapping for legacy negative matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          SQL="delete from public.role_permissions rp using public.permissions p where p.id=rp.permission_id and p.code='SALES_VOID';"
+          if command -v psql >/dev/null 2>&1; then
+            psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -c "$SQL"
+          else
+            docker run --rm --network host postgres:17-alpine \
+              psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 -c "$SQL"
           fi
 
       - name: Exercise POS cash reversal fail-closed matrix
