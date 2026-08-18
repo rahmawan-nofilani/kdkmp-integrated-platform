@@ -3,7 +3,7 @@ name: Release 1 UAT Vercel DEVELOPMENT Deploy
 on:
   push:
     branches:
-      - ops/release1-uat-deploy
+      - main
     paths:
       - .github/workflows/release1-uat-vercel-development-deploy.yml
 
@@ -75,6 +75,4 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
-          DEPLOY_URL="$(npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --scope=nofilanirahmawan-1452s-projects)"
-          echo "Deployment URL: $DEPLOY_URL"
-          echo "deployment_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --scope=nofilanirahmawan-1452s-projects
