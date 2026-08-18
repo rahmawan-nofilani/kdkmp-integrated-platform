@@ -6,6 +6,7 @@ import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
 
 type RpcResult = { data: unknown; error: { message: string } | null };
+type DraftLine = { account_id: string; debit: number; credit: number; memo: string | null };
 
 type AccountingCommandRpc = (
   fn:
@@ -70,35 +71,53 @@ function commandRpc(client: unknown): AccountingCommandRpc {
   return rpc.bind(client) as AccountingCommandRpc;
 }
 
+function parseDraftLines(raw: string): DraftLine[] | null {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return null; }
+  if (!Array.isArray(value) || value.length < 2 || value.length > 20) return null;
+
+  const lines: DraftLine[] = [];
+  let debitCents = 0;
+  let creditCents = 0;
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    const accountId = typeof row.account_id === "string" ? row.account_id.trim() : "";
+    const debit = Number(row.debit ?? 0);
+    const credit = Number(row.credit ?? 0);
+    const memo = typeof row.memo === "string" ? row.memo.trim() : "";
+    if (!accountId || !Number.isFinite(debit) || !Number.isFinite(credit) || debit < 0 || credit < 0 || memo.length > 500) return null;
+    const d = Math.round(debit * 100);
+    const c = Math.round(credit * 100);
+    if ((d > 0 && c > 0) || (d === 0 && c === 0)) return null;
+    debitCents += d;
+    creditCents += c;
+    lines.push({ account_id: accountId, debit: d / 100, credit: c / 100, memo: memo || null });
+  }
+  if (debitCents <= 0 || debitCents !== creditCents) return null;
+  return lines;
+}
+
 export async function createManualJournalDraftAction(formData: FormData) {
   await requirePermission("ACCOUNTING_DRAFT_CREATE");
-
   const periodId = String(formData.get("accounting_period_id") ?? "").trim();
   const entryDate = String(formData.get("entry_date") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim();
   const sourceReference = String(formData.get("source_reference") ?? "").trim();
-  const debitAccountId = String(formData.get("debit_account_id") ?? "").trim();
-  const creditAccountId = String(formData.get("credit_account_id") ?? "").trim();
-  const amount = Number(formData.get("amount") ?? 0);
-
-  if (!periodId || !entryDate || !description || !debitAccountId || !creditAccountId || debitAccountId === creditAccountId || !Number.isFinite(amount) || amount <= 0) {
-    redirect("/dashboard/accounting?error=invalid-draft-input");
+  const lines = parseDraftLines(String(formData.get("lines_json") ?? ""));
+  if (!periodId || !entryDate || !description || description.length > 500 || sourceReference.length > 160 || !lines) {
+    redirect("/dashboard/accounting?error=invalid-draft-lines");
   }
 
   const { supabase } = await requireAccessContext();
-  const rpc = commandRpc(supabase);
-  const { error } = await rpc("create_manual_journal_draft", {
+  const { error } = await commandRpc(supabase)("create_manual_journal_draft", {
     p_accounting_period_id: periodId,
     p_entry_date: entryDate,
     p_description: description,
-    p_lines: [
-      { account_id: debitAccountId, debit: amount, credit: 0, memo: description },
-      { account_id: creditAccountId, debit: 0, credit: amount, memo: description },
-    ],
+    p_lines: lines,
     p_idempotency_key: `accounting-ui-create-${crypto.randomUUID()}`,
     p_source_reference: sourceReference || null,
   });
-
   if (error) redirect(`/dashboard/accounting?error=${commandError(error.message)}`);
   revalidatePath("/dashboard/accounting");
   redirect("/dashboard/accounting?success=draft-created");
@@ -109,7 +128,6 @@ export async function validateManualJournalAction(formData: FormData) {
   const journalEntryId = String(formData.get("journal_entry_id") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (!journalEntryId) redirect("/dashboard/accounting?error=invalid-journal");
-
   const { supabase } = await requireAccessContext();
   const { error } = await commandRpc(supabase)("validate_manual_journal", {
     p_journal_entry_id: journalEntryId,
@@ -129,7 +147,6 @@ export async function authorizeAndPostManualJournalAction(formData: FormData) {
   if (!journalEntryId) redirect("/dashboard/accounting?error=invalid-journal");
   if (!reason) redirect("/dashboard/accounting?error=post-reason-required");
   if (!conflictDeclared) redirect("/dashboard/accounting?error=conflict-required");
-
   const { supabase } = await requireAccessContext();
   const rpc = commandRpc(supabase);
   const { error: authorizationError } = await rpc("authorize_manual_journal_post", {
@@ -139,7 +156,6 @@ export async function authorizeAndPostManualJournalAction(formData: FormData) {
     p_conflict_declared: true,
   });
   if (authorizationError) redirect(`/dashboard/accounting?error=${commandError(authorizationError.message)}`);
-
   const { error: postError } = await rpc("post_manual_journal", {
     p_journal_entry_id: journalEntryId,
     p_idempotency_key: `accounting-ui-post-${crypto.randomUUID()}`,
@@ -157,7 +173,6 @@ export async function createManualJournalReversalAction(formData: FormData) {
   const entryDate = String(formData.get("entry_date") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (!originalJournalId || !periodId || !entryDate || !reason) redirect("/dashboard/accounting?error=reversal-reason-required");
-
   const { supabase } = await requireAccessContext();
   const { error } = await commandRpc(supabase)("create_manual_journal_reversal_draft", {
     p_original_journal_entry_id: originalJournalId,
@@ -176,7 +191,6 @@ export async function validateManualJournalReversalAction(formData: FormData) {
   const journalEntryId = String(formData.get("journal_entry_id") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (!journalEntryId) redirect("/dashboard/accounting?error=invalid-journal");
-
   const { supabase } = await requireAccessContext();
   const { error } = await commandRpc(supabase)("validate_manual_journal_reversal", {
     p_journal_entry_id: journalEntryId,
@@ -196,7 +210,6 @@ export async function authorizeAndPostManualJournalReversalAction(formData: Form
   if (!journalEntryId) redirect("/dashboard/accounting?error=invalid-journal");
   if (!reason) redirect("/dashboard/accounting?error=reversal-reason-required");
   if (!conflictDeclared) redirect("/dashboard/accounting?error=conflict-required");
-
   const { supabase } = await requireAccessContext();
   const rpc = commandRpc(supabase);
   const { error: authorizationError } = await rpc("authorize_manual_journal_reversal", {
@@ -206,7 +219,6 @@ export async function authorizeAndPostManualJournalReversalAction(formData: Form
     p_conflict_declared: true,
   });
   if (authorizationError) redirect(`/dashboard/accounting?error=${commandError(authorizationError.message)}`);
-
   const { error: postError } = await rpc("post_manual_journal_reversal", {
     p_journal_entry_id: journalEntryId,
     p_idempotency_key: `accounting-ui-reversal-post-${crypto.randomUUID()}`,
@@ -222,7 +234,6 @@ export async function softCloseAccountingPeriodAction(formData: FormData) {
   const periodId = String(formData.get("accounting_period_id") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (!periodId || !reason) redirect("/dashboard/accounting?error=period-close-reason-required");
-
   const { supabase } = await requireAccessContext();
   const { error } = await commandRpc(supabase)("soft_close_accounting_period", {
     p_accounting_period_id: periodId,
@@ -241,7 +252,6 @@ export async function hardCloseAccountingPeriodAction(formData: FormData) {
   const conflictDeclared = formData.get("conflict_declared") === "on";
   if (!periodId || !reason) redirect("/dashboard/accounting?error=period-close-reason-required");
   if (!conflictDeclared) redirect("/dashboard/accounting?error=conflict-required");
-
   const { supabase } = await requireAccessContext();
   const { error } = await commandRpc(supabase)("hard_close_accounting_period", {
     p_accounting_period_id: periodId,
