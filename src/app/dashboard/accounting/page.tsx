@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getAccountingDashboardSnapshot } from "@/lib/accounting/dashboard-snapshot";
@@ -153,8 +154,10 @@ export default async function AccountingPage({
 
       <section className="dashboard-grid">
         <article className="panel">
-          <h3>Manual Journal Draft</h3>
-          <p className="panel-subtitle">Form Release-1 membuat jurnal dua sisi yang seimbang. Editor multi-line tetap backlog UX berikutnya.</p>
+          <div className="panel-heading-row">
+            <div><h3>Manual Journal Draft</h3><p className="panel-subtitle">Quick entry dua sisi tetap tersedia; gunakan editor multi-line untuk jurnal dengan lebih dari dua baris.</p></div>
+            {canDraft ? <Link className="secondary-button" href="/dashboard/accounting/journal/new">Buka Editor Multi-line</Link> : null}
+          </div>
           {canDraft ? (
             openPeriods.length > 0 && postingAccounts.length >= 2 ? (
               <form action={createManualJournalDraftAction} className="form-stack">
@@ -264,8 +267,8 @@ export default async function AccountingPage({
       </section>
 
       <section className="panel section-panel">
-        <div className="panel-heading-row"><div><h3>Reconciliation</h3><p className="panel-subtitle">Status exception perlu diselesaikan sebelum period close; drill-down detail tetap backlog UX berikutnya.</p></div></div>
-        {reconciliations.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Type</th><th>As of</th><th>Subledger</th><th>GL</th><th>Difference</th><th>Status</th></tr></thead><tbody>{reconciliations.map((run) => <tr key={run.id}><td>{run.reconciliation_type}</td><td>{run.as_of_date}</td><td>{run.subledger_amount ?? "—"}</td><td>{run.gl_amount ?? "—"}</td><td>{run.difference_amount ?? "—"}</td><td><span className={`check-state ${run.status === "MATCHED" || run.status === "CLOSED" ? "" : "pending"}`}>{run.status}</span></td></tr>)}</tbody></table></div> : <div className="empty-state">Belum ada reconciliation run tersimpan.</div>}
+        <div className="panel-heading-row"><div><h3>Reconciliation</h3><p className="panel-subtitle">Status exception perlu diselesaikan sebelum period close; setiap run dapat dibuka sebagai drill-down read-only.</p></div></div>
+        {reconciliations.length ? <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Type</th><th>As of</th><th>Subledger</th><th>GL</th><th>Difference</th><th>Status</th><th>Detail</th></tr></thead><tbody>{reconciliations.map((run) => <tr key={run.id}><td>{run.reconciliation_type}</td><td>{run.as_of_date}</td><td>{run.subledger_amount ?? "—"}</td><td>{run.gl_amount ?? "—"}</td><td>{run.difference_amount ?? "—"}</td><td><span className={`check-state ${run.status === "MATCHED" || run.status === "CLOSED" ? "" : "pending"}`}>{run.status}</span></td><td><Link className="secondary-button" href={`/dashboard/accounting/reconciliation/${run.id}`}>Buka Detail</Link></td></tr>)}</tbody></table></div> : <div className="empty-state">Belum ada reconciliation run tersimpan.</div>}
       </section>
     </>
   );
