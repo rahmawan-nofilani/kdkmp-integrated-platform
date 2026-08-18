@@ -67,7 +67,12 @@ begin
     raise exception 'anon_must_not_execute_get_my_access_context';
   end if;
 
-  if has_function_privilege('public', 'public.get_my_access_context()', 'EXECUTE') then
+  if exists (
+    select 1
+    from aclexplode(coalesce(v_proc.proacl, acldefault('f', v_proc.proowner))) acl
+    where acl.grantee = 0
+      and acl.privilege_type = 'EXECUTE'
+  ) then
     raise exception 'public_must_not_execute_get_my_access_context';
   end if;
 
