@@ -138,6 +138,19 @@ insert into ci_partial_snapshot values
 ('journal',(select md5(to_jsonb(j)::text) from public.journal_entries j where id='10800000-0000-4000-8000-000000000040')),
 ('cash',(select md5(to_jsonb(c)::text) from public.pos_cash_movements c where id='10800000-0000-4000-8000-000000000070'));
 
+create temporary table ci_partial_results(
+  attempt integer primary key,
+  sales_return_id uuid,
+  refund_payment_intent_id uuid,
+  refund_payment_attempt_id uuid,
+  inventory_movement_id uuid,
+  journal_entry_id uuid,
+  cash_movement_id uuid,
+  refund_receipt_id uuid,
+  refund_amount numeric,
+  sale_fully_returned boolean
+) on commit drop;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub','10800000-0000-4000-8000-000000000001',true);
 select * from public.return_cash_pos_items(
@@ -152,19 +165,30 @@ select * from public.return_cash_pos_items(
 )\gset retry_
 reset role;
 
+insert into ci_partial_results values
+(1,:'first_sales_return_id'::uuid,:'first_refund_payment_intent_id'::uuid,:'first_refund_payment_attempt_id'::uuid,
+ :'first_inventory_movement_id'::uuid,:'first_journal_entry_id'::uuid,:'first_cash_movement_id'::uuid,:'first_refund_receipt_id'::uuid,
+ :'first_refund_amount'::numeric,:'first_sale_fully_returned'::boolean),
+(2,:'retry_sales_return_id'::uuid,:'retry_refund_payment_intent_id'::uuid,:'retry_refund_payment_attempt_id'::uuid,
+ :'retry_inventory_movement_id'::uuid,:'retry_journal_entry_id'::uuid,:'retry_cash_movement_id'::uuid,:'retry_refund_receipt_id'::uuid,
+ :'retry_refund_amount'::numeric,:'retry_sale_fully_returned'::boolean);
+
 do $$
+declare v_first ci_partial_results%rowtype; v_retry ci_partial_results%rowtype;
 begin
-  if :'first_sales_return_id'::uuid is distinct from :'retry_sales_return_id'::uuid then raise exception 'partial_return_idempotent_return_mismatch'; end if;
-  if :'first_refund_receipt_id'::uuid is distinct from :'retry_refund_receipt_id'::uuid then raise exception 'partial_return_idempotent_receipt_mismatch'; end if;
-  if :'first_refund_amount'::numeric<>100000 or :'first_sale_fully_returned'::boolean then raise exception 'partial_return_first_result_invalid'; end if;
+  select * into v_first from ci_partial_results where attempt=1;
+  select * into v_retry from ci_partial_results where attempt=2;
+  if v_first.sales_return_id is distinct from v_retry.sales_return_id then raise exception 'partial_return_idempotent_return_mismatch'; end if;
+  if v_first.refund_receipt_id is distinct from v_retry.refund_receipt_id then raise exception 'partial_return_idempotent_receipt_mismatch'; end if;
+  if v_first.refund_amount<>100000 or v_first.sale_fully_returned then raise exception 'partial_return_first_result_invalid'; end if;
   if (select status from public.sales_transactions where id='10800000-0000-4000-8000-000000000050')<>'COMPLETED' then raise exception 'partial_return_sale_should_remain_completed'; end if;
   if (select status from public.payment_intents where id='10800000-0000-4000-8000-000000000020')<>'SETTLED' then raise exception 'partial_return_original_payment_changed_too_early'; end if;
   if (select count(*) from public.pos_partial_return_commands where idempotency_key='POS-PARTIAL-CI-ONE')<>1 then raise exception 'partial_return_idempotency_command_count_invalid'; end if;
   if (select sum(quantity) from public.pos_partial_return_lines where original_sales_transaction_line_id='10800000-0000-4000-8000-000000000051')<>1 then raise exception 'partial_return_first_quantity_invalid'; end if;
-  if (select sum(base_quantity) from public.inventory_movement_lines where inventory_movement_id=:'first_inventory_movement_id'::uuid)<>1 then raise exception 'partial_return_inventory_quantity_invalid'; end if;
-  if (select coalesce(sum(debit),0)-coalesce(sum(credit),0) from public.journal_lines where journal_entry_id=:'first_journal_entry_id'::uuid)<>0 then raise exception 'partial_return_journal_unbalanced'; end if;
-  if (select movement_type||':'||direction||':'||amount::text from public.pos_cash_movements where id=:'first_cash_movement_id'::uuid)<>'CASH_REFUND:OUT:100000.00' then raise exception 'partial_return_cash_refund_invalid'; end if;
-  if (select refund_amount from public.pos_refund_receipts where id=:'first_refund_receipt_id'::uuid)<>100000 then raise exception 'partial_return_receipt_invalid'; end if;
+  if (select sum(base_quantity) from public.inventory_movement_lines where inventory_movement_id=v_first.inventory_movement_id)<>1 then raise exception 'partial_return_inventory_quantity_invalid'; end if;
+  if (select coalesce(sum(debit),0)-coalesce(sum(credit),0) from public.journal_lines where journal_entry_id=v_first.journal_entry_id)<>0 then raise exception 'partial_return_journal_unbalanced'; end if;
+  if (select movement_type||':'||direction||':'||amount::text from public.pos_cash_movements where id=v_first.cash_movement_id)<>'CASH_REFUND:OUT:100000.00' then raise exception 'partial_return_cash_refund_invalid'; end if;
+  if (select refund_amount from public.pos_refund_receipts where id=v_first.refund_receipt_id)<>100000 then raise exception 'partial_return_receipt_invalid'; end if;
 end $$;
 
 set local role authenticated;
@@ -176,9 +200,16 @@ select * from public.return_cash_pos_items(
 )\gset second_
 reset role;
 
+insert into ci_partial_results values
+(3,:'second_sales_return_id'::uuid,:'second_refund_payment_intent_id'::uuid,:'second_refund_payment_attempt_id'::uuid,
+ :'second_inventory_movement_id'::uuid,:'second_journal_entry_id'::uuid,:'second_cash_movement_id'::uuid,:'second_refund_receipt_id'::uuid,
+ :'second_refund_amount'::numeric,:'second_sale_fully_returned'::boolean);
+
 do $$
+declare v_second ci_partial_results%rowtype;
 begin
-  if :'second_refund_amount'::numeric<>100000 or not :'second_sale_fully_returned'::boolean then raise exception 'partial_return_second_result_invalid'; end if;
+  select * into v_second from ci_partial_results where attempt=3;
+  if v_second.refund_amount<>100000 or not v_second.sale_fully_returned then raise exception 'partial_return_second_result_invalid'; end if;
   if (select status from public.sales_transactions where id='10800000-0000-4000-8000-000000000050')<>'RETURNED' then raise exception 'partial_return_sale_not_returned'; end if;
   if (select status from public.payment_intents where id='10800000-0000-4000-8000-000000000020')<>'REFUNDED' then raise exception 'partial_return_original_intent_not_refunded'; end if;
   if (select status from public.payment_attempts where id='10800000-0000-4000-8000-000000000021')<>'REFUNDED' then raise exception 'partial_return_original_attempt_not_refunded'; end if;
