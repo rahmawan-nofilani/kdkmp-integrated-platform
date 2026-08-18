@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'database/migrations/**accounting_manual_journal_command_engine.sql'
+      - 'database/migrations/**accounting_board_posting_sod_policy.sql'
       - 'database/tests/accounting_journal_command_engine.sql'
       - 'src/app/dashboard/accounting/**'
       - 'src/lib/accounting/**'
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - 'database/migrations/**accounting_manual_journal_command_engine.sql'
+      - 'database/migrations/**accounting_board_posting_sod_policy.sql'
       - 'database/tests/accounting_journal_command_engine.sql'
       - 'src/app/dashboard/accounting/**'
       - 'src/lib/accounting/**'
@@ -73,7 +75,7 @@ jobs:
           cd "${{ steps.prepare.outputs.workdir }}"
           npx --yes "supabase@${SUPABASE_CLI_VERSION}" db start
 
-      - name: Exercise maker checker poster flow and rollback
+      - name: Exercise maker checker BOARD poster flow and rollback
         shell: bash
         run: |
           set -euo pipefail

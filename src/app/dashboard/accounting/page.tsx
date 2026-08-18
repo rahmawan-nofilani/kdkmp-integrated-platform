@@ -1,7 +1,7 @@
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getAccountingDashboardSnapshot } from "@/lib/accounting/dashboard-snapshot";
-import { createManualJournalDraftAction, validateManualJournalAction } from "./actions";
+import { authorizeAndPostManualJournalAction, createManualJournalDraftAction, validateManualJournalAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,15 @@ const errorMessages: Record<string, string> = {
   "account-invalid": "Akun jurnal tidak aktif, bukan posting account, atau berada di scope lain.",
   "lines-invalid": "Baris jurnal tidak valid.",
   "maker-checker": "Pembuat jurnal tidak boleh memvalidasi jurnalnya sendiri.",
+  "maker-checker-poster": "Maker, checker, dan poster wajib merupakan profil yang berbeda.",
   "not-draft": "Jurnal sudah bukan berstatus DRAFT.",
+  "not-validated": "Jurnal belum berada pada status VALIDATED.",
+  "post-denied": "Akun Anda tidak memiliki otorisasi ACCOUNTING_POST.",
+  "approval-missing": "Approval request posting belum tersedia untuk jurnal ini.",
+  "approval-not-open": "Approval request posting sudah tidak terbuka.",
+  "conflict-required": "Pengurus wajib menyatakan deklarasi konflik kepentingan sebelum posting.",
+  "post-reason-required": "Alasan/otorisasi posting wajib diisi.",
+  "poster-not-authorizer": "Jurnal hanya boleh diposting oleh Pengurus yang memberi otorisasi posting.",
   idempotency: "Permintaan jurnal bertabrakan dengan idempotency key yang sudah ada.",
   system: "Perintah accounting gagal. Detail teknis tidak ditampilkan kepada pengguna.",
 };
@@ -55,20 +63,21 @@ export default async function AccountingPage({
           <p className="eyebrow">Finance & Accounting</p>
           <h1>Accounting Control Center</h1>
           <p>
-            Manual journal DRAFT dan independent validation memakai command engine terkontrol. Posting General Ledger tetap dikunci sampai
-            role `ACCOUNTING_POST` dan approval policy JOURNAL_POST disetujui secara terpisah.
+            Release-1 controlled workflow: FINANCE_OFFICER membuat DRAFT, MANAGER melakukan independent validation,
+            dan BOARD/Pengurus memberi otorisasi sekaligus mengeksekusi posting setelah approval gate terpenuhi.
           </p>
         </div>
-        <span className="status-pill">CONTROLLED FOUNDATION</span>
+        <span className="status-pill">CONTROLLED OPERATIONAL</span>
       </section>
 
       {params.error && errorMessages[params.error] ? <div className="alert-error" style={{ marginBottom: 18 }}>{errorMessages[params.error]}</div> : null}
       {params.success === "draft-created" ? <div className="empty-state" style={{ marginBottom: 18, borderStyle: "solid" }}>Draft jurnal berhasil dibuat. Jurnal belum masuk General Ledger dan harus divalidasi actor berbeda.</div> : null}
-      {params.success === "validated" ? <div className="empty-state" style={{ marginBottom: 18, borderStyle: "solid" }}>Jurnal berhasil divalidasi. Posting tetap terkunci sampai SoD dan approval policy diaktifkan.</div> : null}
+      {params.success === "validated" ? <div className="empty-state" style={{ marginBottom: 18, borderStyle: "solid" }}>Jurnal berhasil divalidasi. Approval request BOARD dibuat otomatis dan jurnal menunggu otorisasi posting.</div> : null}
+      {params.success === "posted" ? <div className="empty-state" style={{ marginBottom: 18, borderStyle: "solid" }}>Jurnal berhasil diotorisasi dan diposting oleh BOARD/Pengurus. Posted journal bersifat immutable.</div> : null}
 
       <section className="metric-grid">
         <article className="metric-card"><div className="metric-label">COA</div><div className="metric-value">{accounts.length}</div><div className="metric-note">{postingAccounts.length} posting account · {controlAccounts.length} control candidate.</div></article>
-        <article className="metric-card"><div className="metric-label">Periode Open</div><div className="metric-value">{openPeriods.length}</div><div className="metric-note">Manual draft hanya dapat dibuat pada periode OPEN.</div></article>
+        <article className="metric-card"><div className="metric-label">Periode Open</div><div className="metric-value">{openPeriods.length}</div><div className="metric-note">Draft dan posting hanya berlaku pada periode yang diizinkan engine.</div></article>
         <article className="metric-card"><div className="metric-label">Event Mapping Aktif</div><div className="metric-value">{activeMappings.length}/{events.length}</div><div className="metric-note">Domain event tetap mengikuti mapping authoritative.</div></article>
         <article className="metric-card"><div className="metric-label">Reconciliation</div><div className="metric-value">{reconciliations.length}</div><div className="metric-note">Run reconciliation akan muncul setelah subledger mulai terintegrasi.</div></article>
       </section>
@@ -80,7 +89,7 @@ export default async function AccountingPage({
             <div className="check-item"><span>Lihat Accounting</span><span className="check-state">READY</span></div>
             <div className="check-item"><span>Buat Draft Jurnal</span><span className={`check-state ${canDraft ? "" : "pending"}`}>{canDraft ? "ALLOWED" : "NOT ASSIGNED"}</span></div>
             <div className="check-item"><span>Validasi Jurnal</span><span className={`check-state ${canValidate ? "" : "pending"}`}>{canValidate ? "ALLOWED" : "NOT ASSIGNED"}</span></div>
-            <div className="check-item"><span>Posting General Ledger</span><span className={`check-state ${canPost ? "" : "pending"}`}>{canPost ? "PERMISSION PRESENT — APPROVAL STILL REQUIRED" : "LOCKED"}</span></div>
+            <div className="check-item"><span>Posting General Ledger</span><span className={`check-state ${canPost ? "" : "pending"}`}>{canPost ? "BOARD / AUTHORIZED" : "NOT ASSIGNED"}</span></div>
             <div className="check-item"><span>Kelola Periode</span><span className={`check-state ${canManagePeriod ? "" : "pending"}`}>{canManagePeriod ? "ALLOWED" : "NOT ASSIGNED"}</span></div>
             <div className="check-item"><span>Reconciliation</span><span className={`check-state ${canReconcile ? "" : "pending"}`}>{canReconcile ? "ALLOWED" : "NOT ASSIGNED"}</span></div>
           </div>
@@ -88,14 +97,16 @@ export default async function AccountingPage({
 
         <article className="panel">
           <h3>Control Gate</h3>
-          <p className="panel-subtitle">Kondisi minimum sebelum posting manual dinyalakan.</p>
+          <p className="panel-subtitle">Posting manual menggunakan tiga aktor bisnis dan approval evidence.</p>
           <div className="check-list">
             <div className="check-item"><span>Balanced journal invariant</span><span className="check-state">READY</span></div>
-            <div className="check-item"><span>Maker ≠ Checker</span><span className="check-state">ENFORCED</span></div>
-            <div className="check-item"><span>Maker ≠ Checker ≠ Poster</span><span className="check-state">ENGINE READY</span></div>
+            <div className="check-item"><span>FINANCE_OFFICER = Maker</span><span className="check-state">ENFORCED</span></div>
+            <div className="check-item"><span>MANAGER = Checker</span><span className="check-state">ENFORCED</span></div>
+            <div className="check-item"><span>BOARD = Poster</span><span className="check-state">ENFORCED</span></div>
+            <div className="check-item"><span>SUPERVISOR = Read/Audit</span><span className="check-state">ENFORCED</span></div>
+            <div className="check-item"><span>JOURNAL_POST approval policy</span><span className="check-state">ACTIVE</span></div>
+            <div className="check-item"><span>Conflict declaration</span><span className="check-state">REQUIRED</span></div>
             <div className="check-item"><span>Posted journal immutable</span><span className="check-state">READY</span></div>
-            <div className="check-item"><span>JOURNAL_POST approval policy</span><span className="check-state pending">DRAFT / NOT ACTIVE</span></div>
-            <div className="check-item"><span>Posting role policy</span><span className="check-state pending">NO BASELINE MAPPING</span></div>
           </div>
         </article>
       </section>
@@ -139,32 +150,46 @@ export default async function AccountingPage({
 
         <article className="panel">
           <h3>Posting Boundary</h3>
-          <p className="panel-subtitle">Tidak ada tombol POST pada tahap ini.</p>
+          <p className="panel-subtitle">Otorisasi tetap fail-closed meskipun role memiliki ACCOUNTING_POST.</p>
           <div className="check-list">
             <div className="check-item"><span>Finance Officer</span><span className="check-state">MAKER / DRAFT</span></div>
             <div className="check-item"><span>Manager</span><span className="check-state">CHECKER / VALIDATE</span></div>
-            <div className="check-item"><span>Poster</span><span className="check-state pending">OWNER DECISION REQUIRED</span></div>
-            <div className="check-item"><span>Approval request</span><span className="check-state pending">MUST BE APPROVED</span></div>
+            <div className="check-item"><span>BOARD / Pengurus</span><span className="check-state">AUTHORIZE + POST</span></div>
+            <div className="check-item"><span>Supervisor / Pengawas</span><span className="check-state">READ / AUDIT</span></div>
           </div>
-          <div className="empty-state" style={{ marginTop: 18 }}>Memberikan ACCOUNTING_POST saja tidak cukup. Engine juga mensyaratkan actor ketiga yang berbeda dan approval policy JOURNAL_POST aktif dengan request APPROVED.</div>
+          <div className="empty-state" style={{ marginTop: 18 }}>BOARD wajib menyatakan tidak ada konflik kepentingan. Approval decision dan posting dicatat terpisah, dan hanya BOARD yang memberi approval tersebut yang boleh mengeksekusi POST.</div>
         </article>
       </section>
 
       <section className="panel section-panel">
-        <div className="panel-heading-row"><div><h3>Journal Register</h3><p className="panel-subtitle">DRAFT manual dapat divalidasi checker. POST tetap tidak tersedia dari UI.</p></div></div>
+        <div className="panel-heading-row"><div><h3>Journal Register</h3><p className="panel-subtitle">DRAFT divalidasi Manager; VALIDATED diotorisasi dan diposting oleh BOARD/Pengurus.</p></div></div>
         {journals.length ? (
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>No.</th><th>Tanggal</th><th>Deskripsi</th><th>Sumber</th><th>Status</th><th>Action</th></tr></thead>
               <tbody>{journals.map((journal) => <tr key={journal.id}>
                 <td>{journal.journal_number}</td><td>{journal.entry_date}</td><td>{journal.description}</td><td>{journal.source_domain}</td><td>{journal.status}</td>
-                <td>{canValidate && journal.status === "DRAFT" && journal.source_domain === "MANUAL" ? (
-                  <form action={validateManualJournalAction} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input type="hidden" name="journal_entry_id" value={journal.id} />
-                    <input name="reason" maxLength={500} placeholder="Catatan (opsional)" aria-label={`Catatan validasi ${journal.journal_number}`} />
-                    <button className="primary-button" type="submit">Validate</button>
-                  </form>
-                ) : <span className="check-state pending">—</span>}</td>
+                <td>
+                  {canValidate && journal.status === "DRAFT" && journal.source_domain === "MANUAL" ? (
+                    <form action={validateManualJournalAction} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <input type="hidden" name="journal_entry_id" value={journal.id} />
+                      <input name="reason" maxLength={500} placeholder="Catatan validasi (opsional)" aria-label={`Catatan validasi ${journal.journal_number}`} />
+                      <button className="primary-button" type="submit">Validate</button>
+                    </form>
+                  ) : null}
+                  {canPost && journal.status === "VALIDATED" && journal.source_domain === "MANUAL" ? (
+                    <form action={authorizeAndPostManualJournalAction} style={{ display: "grid", gap: 8, minWidth: 260 }}>
+                      <input type="hidden" name="journal_entry_id" value={journal.id} />
+                      <input name="reason" required maxLength={500} placeholder="Alasan otorisasi posting" aria-label={`Alasan posting ${journal.journal_number}`} />
+                      <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input type="checkbox" name="conflict_declared" required />
+                        <span>Saya menyatakan tidak ada konflik kepentingan.</span>
+                      </label>
+                      <button className="primary-button" type="submit">Authorize &amp; Post</button>
+                    </form>
+                  ) : null}
+                  {!((canValidate && journal.status === "DRAFT" && journal.source_domain === "MANUAL") || (canPost && journal.status === "VALIDATED" && journal.source_domain === "MANUAL")) ? <span className="check-state pending">—</span> : null}
+                </td>
               </tr>)}</tbody>
             </table>
           </div>
@@ -202,6 +227,20 @@ export default async function AccountingPage({
             const mappingCount = mappings.filter((mapping) => mapping.event_definition_id === event.id && mapping.status === "ACTIVE").length;
             return <div className="check-item" key={event.id}><span>{event.name}<small className="item-subtext">{event.domain} · {event.event_code}</small></span><span className={`check-state ${mappingCount > 0 ? "" : "pending"}`}>{mappingCount > 0 ? "MAPPED" : "UNMAPPED"}</span></div>;
           })}</div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel">
+          <h3>Subledger Control</h3>
+          <p className="panel-subtitle">Control mappings tetap harus direview sebelum domain subledger baru diaktifkan.</p>
+          {controlMappings.length ? <div className="check-list">{controlMappings.map((mapping) => <div className="check-item" key={mapping.id}><span>{mapping.subledger_code}</span><span className={`check-state ${mapping.status === "ACTIVE" ? "" : "pending"}`}>{mapping.status}</span></div>)}</div> : <div className="empty-state">Belum ada subledger control mapping pada scope ini.</div>}
+        </article>
+
+        <article className="panel">
+          <h3>Reconciliation</h3>
+          <p className="panel-subtitle">Reconciliation tetap terpisah dari authorization/posting manual journal.</p>
+          {reconciliations.length ? <div className="check-list">{reconciliations.map((run) => <div className="check-item" key={run.id}><span>{run.reconciliation_type}<small className="item-subtext">As of {run.as_of_date}</small></span><span className={`check-state ${run.status === "MATCHED" || run.status === "CLOSED" ? "" : "pending"}`}>{run.status}</span></div>)}</div> : <div className="empty-state">Belum ada reconciliation run tersimpan.</div>}
         </article>
       </section>
     </>
