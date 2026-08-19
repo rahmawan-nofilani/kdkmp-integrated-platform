@@ -5,6 +5,8 @@ import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+const DEVELOPMENT_ORG_CODE = "DEMO-KDKMP-DEV";
+
 function text(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
 }
@@ -27,6 +29,16 @@ export async function generateUatRecoveryLinkAction(formData: FormData) {
   }
 
   const admin = createAdminClient();
+  const { data: actorOrganization, error: organizationError } = await admin
+    .from("organizations")
+    .select("code")
+    .eq("id", actorProfile.organization_id)
+    .maybeSingle();
+
+  if (organizationError || actorOrganization?.code !== DEVELOPMENT_ORG_CODE) {
+    redirect("/dashboard/access/uat-recovery?error=development-only");
+  }
+
   const { data: usersPage, error: usersError } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
   if (usersError) {
     console.error("UAT recovery user lookup failed", usersError.message);
