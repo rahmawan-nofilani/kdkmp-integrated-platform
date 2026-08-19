@@ -1,0 +1,36 @@
+name: Gate 9 Chromium Smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  chromium-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Install temporary Puppeteer CDP client only
+        run: npm install --no-save --ignore-scripts puppeteer-core@24.16.0
+
+      - name: Confirm Chromium executable
+        run: |
+          command -v google-chrome || command -v chromium || command -v chromium-browser
+          (google-chrome --version || chromium --version || chromium-browser --version)
+
+      - name: Execute Release-1 Gate 9 browser smoke
+        run: node scripts/gate9-chromium-smoke.cjs
