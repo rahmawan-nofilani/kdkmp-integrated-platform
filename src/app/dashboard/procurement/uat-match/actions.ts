@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
+import { asProcurementClient } from "@/types/procurement";
 
 const DEVELOPMENT_ORG_CODE = "DEMO-KDKMP-DEV";
 const UAT_PO_NUMBER = "PO-20260819-0DF2F8DD";
@@ -40,10 +41,12 @@ function errorCode(message: string) {
 }
 
 export async function runUatThreeWayMatchAction() {
-  await requirePermission("PURCHASE_INVOICE_CREATE");
   await requirePermission("PURCHASE_MATCH");
 
-  const { profile, supabase } = await requireAccessContext();
+  const { profile, permissionCodes, supabase } = await requireAccessContext();
+  if (!permissionCodes.includes("PURCHASE_INVOICE_CREATE")) {
+    redirect("/dashboard/procurement/uat-match?error=permission-denied");
+  }
   if (!profile.organization_id) redirect("/dashboard/procurement/uat-match?error=scope-denied");
 
   const { data: organization, error: orgError } = await supabase
@@ -56,7 +59,8 @@ export async function runUatThreeWayMatchAction() {
     redirect("/dashboard/procurement/uat-match?error=development-only");
   }
 
-  const { data: po, error: poError } = await supabase
+  const db = asProcurementClient(supabase);
+  const { data: po, error: poError } = await db
     .from("purchase_orders")
     .select("id,po_number,status")
     .eq("organization_id", profile.organization_id)
@@ -66,7 +70,7 @@ export async function runUatThreeWayMatchAction() {
   if (poError || !po) redirect("/dashboard/procurement/uat-match?error=po-missing");
   if (po.status !== "RECEIVED") redirect("/dashboard/procurement/uat-match?error=po-not-matchable");
 
-  const { data: lines, error: lineError } = await supabase
+  const { data: lines, error: lineError } = await db
     .from("purchase_order_lines")
     .select("id,ordered_quantity,unit_price")
     .eq("purchase_order_id", po.id)
@@ -81,7 +85,7 @@ export async function runUatThreeWayMatchAction() {
     redirect("/dashboard/procurement/uat-match?error=invalid-line");
   }
 
-  const rpc = commandRpc(supabase);
+  const rpc = commandRpc(db);
   const invoiceDate = new Date().toISOString().slice(0, 10);
 
   const matched = await rpc("create_match_supplier_invoice", {
