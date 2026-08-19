@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run build && npm install --no-save --no-package-lock puppeteer-core@24.16.0 @sparticuz/chromium@139 && node scripts/gate9-vercel-chromium-serverless.cjs",
+  "buildCommand": "npm run build && npm install --no-save --no-package-lock puppeteer-core@24.15.0 @sparticuz/chromium@138.0.2 && node scripts/gate9-vercel-chromium-serverless.cjs",
   "git": {
     "deploymentEnabled": true
   }
