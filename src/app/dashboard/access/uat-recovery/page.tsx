@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 
 const errorMessages: Record<string, string> = {
   "invalid-request": "Email atau scope Manager tidak valid.",
+  "development-only": "Direct UAT Recovery hanya diizinkan pada organisasi DEVELOPMENT DEMO-KDKMP-DEV.",
   "lookup-failed": "Lookup Auth gagal. Coba lagi setelah memeriksa runtime log.",
   "user-not-found": "User Auth tidak ditemukan.",
   "profile-not-found": "Profile aplikasi untuk user tersebut tidak ditemukan.",
@@ -25,7 +26,7 @@ export default async function UatRecoveryPage({ searchParams }: { searchParams: 
           <p className="eyebrow">Identity &amp; Access · DEVELOPMENT/UAT</p>
           <h1>Direct UAT Recovery</h1>
           <p>
-            Jalur MANAGER-only untuk membuat recovery link Supabase tanpa email/SMTP. Hanya user operasional ACTIVE dalam organisasi Manager yang dapat diproses; MANAGER dan BOARD tetap dilindungi.
+            Jalur MANAGER-only untuk membuat recovery link Supabase tanpa email/SMTP. Hanya user operasional ACTIVE dalam organisasi DEVELOPMENT Manager yang dapat diproses; MANAGER dan BOARD tetap dilindungi.
           </p>
         </div>
         <span className="status-pill">DEVELOPMENT ONLY</span>
