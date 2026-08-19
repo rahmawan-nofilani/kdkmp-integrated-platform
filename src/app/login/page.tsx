@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { login } from "./actions";
@@ -87,6 +88,11 @@ export default async function LoginPage({
             <button className="primary-button" type="submit">
               Masuk
             </button>
+
+            <p className="form-note">
+              Belum punya password atau perlu memulihkan akses?{" "}
+              <Link href="/forgot-password">Buat / reset password</Link>.
+            </p>
 
             <p className="form-note">
               Akses dicatat dan tunduk pada role, permission, data scope, serta
