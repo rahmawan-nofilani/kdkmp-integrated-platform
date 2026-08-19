@@ -7,6 +7,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const DEVELOPMENT_ORG_CODE = "DEMO-KDKMP-DEV";
 
+type RoleRelation = { code?: string | null } | Array<{ code?: string | null }> | null;
+
 function text(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
 }
@@ -17,6 +19,11 @@ function activationPath(actionLink: string | null | undefined, type: "invite" | 
   const tokenHash = parsed.searchParams.get("token") ?? parsed.searchParams.get("token_hash");
   if (!tokenHash) return null;
   return `/activate?token_hash=${encodeURIComponent(tokenHash)}&type=${encodeURIComponent(type)}`;
+}
+
+function roleCodesFromRelation(relation: RoleRelation) {
+  const rows = Array.isArray(relation) ? relation : relation ? [relation] : [];
+  return rows.map((role) => role.code).filter((code): code is string => Boolean(code));
 }
 
 export async function generateUatRecoveryLinkAction(formData: FormData) {
@@ -76,7 +83,9 @@ export async function generateUatRecoveryLinkAction(formData: FormData) {
     redirect("/dashboard/access/uat-recovery?error=lookup-failed");
   }
 
-  const roleCodes = (roleAssignments ?? []).flatMap((assignment) => (assignment.roles ?? []).map((role) => role.code));
+  const roleCodes = (roleAssignments ?? []).flatMap((assignment) =>
+    roleCodesFromRelation(assignment.roles as RoleRelation),
+  );
   if (roleCodes.includes("MANAGER") || roleCodes.includes("BOARD")) {
     redirect("/dashboard/access/uat-recovery?error=protected-user");
   }
