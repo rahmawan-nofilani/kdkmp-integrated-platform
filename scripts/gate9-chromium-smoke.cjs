@@ -60,15 +60,15 @@ async function main() {
         const outlineWidth = Number.parseFloat(s.outlineWidth || '0') || 0;
         const hasOutline = s.outlineStyle !== 'none' && outlineWidth > 0;
         const hasShadow = s.boxShadow && s.boxShadow !== 'none';
-        const visible = r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+        const isVisible = r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
         return {
           tag: el.tagName,
           text: (el.textContent || '').trim().slice(0, 60),
           href: el.getAttribute('href'),
           outline: `${s.outlineStyle} ${s.outlineWidth}`,
           boxShadow: s.boxShadow,
-          visible,
-          indicator: visible && (hasOutline || hasShadow),
+          visible: isVisible,
+          indicator: isVisible && (hasOutline || hasShadow),
         };
       });
       if (ev?.indicator) { focusEvidence = ev; break; }
@@ -98,29 +98,42 @@ async function main() {
     }
     record('UAT-9002', pressedPass, pressedDetail);
 
-    // UAT-9004 — route transition loading feedback under artificial latency.
-    await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle2', timeout: 60000 });
-    const cdp = await page.createCDPSession();
-    await cdp.send('Network.enable');
-    await cdp.send('Network.emulateNetworkConditions', {
-      offline: false,
-      latency: 900,
-      downloadThroughput: 120000,
-      uploadThroughput: 60000,
-      connectionType: 'cellular3g',
+    // UAT-9004 — prove loading UI on a genuinely non-prefetched client transition.
+    const routePage = await browser.newPage();
+    routePage.setDefaultTimeout(15000);
+    await routePage.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+    await routePage.setCacheEnabled(false);
+    let transitionStarted = false;
+    await routePage.setRequestInterception(true);
+    routePage.on('request', (request) => {
+      const headers = request.headers();
+      const url = new URL(request.url());
+      const isAccounting = url.origin === BASE && url.pathname === '/dashboard/accounting';
+      const isPrefetch = headers['next-router-prefetch'] === '1' || headers.purpose === 'prefetch' || String(headers['sec-purpose'] || '').includes('prefetch');
+      if (isAccounting && isPrefetch && !transitionStarted) {
+        request.abort().catch(() => {});
+        return;
+      }
+      if (isAccounting && transitionStarted) {
+        setTimeout(() => request.continue().catch(() => {}), 1800);
+        return;
+      }
+      request.continue().catch(() => {});
     });
-    const target = await page.$('.sidebar a.nav-link[href="/dashboard/accounting"]') || await page.$('.sidebar a.nav-link[href^="/dashboard/"]');
+    await login(routePage);
+    const target = await routePage.$('.sidebar a.nav-link[href="/dashboard/accounting"]');
     let loadingSeen = false;
     let targetHref = null;
     if (target) {
       targetHref = await target.evaluate((el) => el.getAttribute('href'));
-      const loadingPromise = page.waitForSelector('.loading-shell[role="status"], [role="status"][aria-label="Memuat halaman"]', { visible: true, timeout: 7000 }).then(() => true).catch(() => false);
+      const loadingPromise = routePage.waitForSelector('.loading-shell[role="status"], [role="status"][aria-label="Memuat halaman"]', { visible: true, timeout: 8000 }).then(() => true).catch(() => false);
+      transitionStarted = true;
       await target.click();
       loadingSeen = await loadingPromise;
-      await page.waitForFunction((href) => location.pathname === href, { timeout: 20000 }, targetHref).catch(() => {});
+      await routePage.waitForFunction((href) => location.pathname === href, { timeout: 20000 }, targetHref).catch(() => {});
     }
-    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, connectionType: 'none' });
-    record('UAT-9004', loadingSeen, `target=${targetHref}, loading status observed=${loadingSeen}, final=${page.url()}`);
+    record('UAT-9004', loadingSeen, `prefetch blocked, target=${targetHref}, loading status observed=${loadingSeen}, final=${routePage.url()}`);
+    await routePage.close();
 
     // UAT-9005 — prefers-reduced-motion suppresses meaningful loading animation.
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
@@ -151,7 +164,7 @@ async function main() {
     record('UAT-9005', reducedPass, JSON.stringify(reduced));
     await page.emulateMediaFeatures([]);
 
-    // UAT-9003 — mobile navigation and touch targets.
+    // UAT-9003 — mobile navigation, touch target, touch-action, and one physical tap => one route change.
     await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
     await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle2', timeout: 60000 });
     const mobile = await page.evaluate(() => {
@@ -175,18 +188,35 @@ async function main() {
       };
     });
     let mobileTapChangedRoute = false;
+    let mobileClickCount = 0;
+    let mobileHref = null;
+    let menuOpen = false;
     if (mobile.triggerVisible) {
       await page.tap('.mobile-menu-trigger').catch(() => {});
-      const href = await page.$eval('.mobile-menu-panel a.nav-link[href^="/dashboard/"]', (a) => a.getAttribute('href')).catch(() => null);
-      if (href && href !== '/dashboard') {
-        await page.tap(`.mobile-menu-panel a.nav-link[href="${href}"]`).catch(() => {});
-        mobileTapChangedRoute = await page.waitForFunction((h) => location.pathname === h, { timeout: 10000 }, href).then(() => true).catch(() => false);
-      } else if (href) {
-        mobileTapChangedRoute = true;
+      menuOpen = await page.$eval('.mobile-menu', (el) => Boolean(el.open)).catch(() => false);
+      const links = await page.$$('.mobile-menu-panel a.nav-link:not(.disabled)');
+      for (const link of links) {
+        const candidate = await link.evaluate((el) => {
+          const s = getComputedStyle(el); const r = el.getBoundingClientRect();
+          return { href: el.getAttribute('href'), visible: s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0 };
+        }).catch(() => null);
+        if (!candidate?.visible || !candidate.href || candidate.href === '/dashboard') continue;
+        mobileHref = candidate.href;
+        await link.evaluate((el) => {
+          el.scrollIntoView({ block: 'center', inline: 'center' });
+          window.__uatMobileClicks = 0;
+          el.addEventListener('click', () => { window.__uatMobileClicks += 1; }, true);
+        });
+        const box = await link.boundingBox();
+        if (!box) continue;
+        await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+        mobileTapChangedRoute = await page.waitForFunction((h) => location.pathname === h, { timeout: 15000 }, mobileHref).then(() => true).catch(() => false);
+        mobileClickCount = await page.evaluate(() => window.__uatMobileClicks || 0).catch(() => 0);
+        break;
       }
     }
-    const mobilePass = mobile.mobileBarVisible && !mobile.sidebarVisible && mobile.triggerVisible && mobile.triggerHeight >= 44 && mobile.docWidth <= mobile.width + 2 && mobileTapChangedRoute;
-    record('UAT-9003', mobilePass, `${JSON.stringify(mobile)}, single-tap route change=${mobileTapChangedRoute}`);
+    const mobilePass = mobile.mobileBarVisible && !mobile.sidebarVisible && mobile.triggerVisible && mobile.triggerHeight >= 44 && mobile.docWidth <= mobile.width + 2 && mobile.touchAction === 'manipulation' && menuOpen && mobileTapChangedRoute && mobileClickCount === 1;
+    record('UAT-9003', mobilePass, `${JSON.stringify(mobile)}, menuOpen=${menuOpen}, href=${mobileHref}, one-touch clickCount=${mobileClickCount}, route change=${mobileTapChangedRoute}`);
 
     // UAT-9006 — find a table-heavy permitted page and assert page containment + local horizontal scroller.
     const candidates = ['/dashboard/accounting', '/dashboard/procurement', '/dashboard/inventory', '/dashboard/audit'];
