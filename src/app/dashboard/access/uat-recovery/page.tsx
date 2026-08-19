@@ -7,11 +7,12 @@ export const dynamic = "force-dynamic";
 const errorMessages: Record<string, string> = {
   "invalid-request": "Email atau scope Manager tidak valid.",
   "development-only": "Direct UAT Recovery hanya diizinkan pada organisasi DEVELOPMENT DEMO-KDKMP-DEV.",
+  "manager-only": "Direct UAT Recovery hanya dapat dijalankan oleh actor MANAGER.",
   "lookup-failed": "Lookup Auth gagal. Coba lagi setelah memeriksa runtime log.",
   "user-not-found": "User Auth tidak ditemukan.",
   "profile-not-found": "Profile aplikasi untuk user tersebut tidak ditemukan.",
   "scope-denied": "User berada di luar organisasi Manager atau bukan ACTIVE.",
-  "protected-user": "MANAGER dan BOARD tidak boleh dipulihkan melalui jalur operasional umum.",
+  "protected-user": "MANAGER dan BOARD selain actor UAT BOARD yang ditetapkan tidak boleh dipulihkan melalui jalur ini.",
   "link-failed": "Supabase tidak dapat menghasilkan recovery link.",
 };
 
@@ -26,7 +27,7 @@ export default async function UatRecoveryPage({ searchParams }: { searchParams: 
           <p className="eyebrow">Identity &amp; Access · DEVELOPMENT/UAT</p>
           <h1>Direct UAT Recovery</h1>
           <p>
-            Jalur MANAGER-only untuk membuat recovery link Supabase tanpa email/SMTP. Hanya user operasional ACTIVE dalam organisasi DEVELOPMENT Manager yang dapat diproses; MANAGER dan BOARD tetap dilindungi.
+            Jalur MANAGER-only untuk membuat recovery link Supabase tanpa email/SMTP. Hanya user ACTIVE dalam organisasi DEVELOPMENT Manager yang dapat diproses. MANAGER tetap dilindungi; recovery BOARD hanya dibuka untuk actor UAT BOARD yang ditetapkan.
           </p>
         </div>
         <span className="status-pill">DEVELOPMENT ONLY</span>
@@ -39,9 +40,12 @@ export default async function UatRecoveryPage({ searchParams }: { searchParams: 
         <p className="panel-subtitle">
           Setelah dikirim, browser langsung membuka halaman aktivasi KDKMP. Tidak ada email yang dikirim dan SMTP tidak dipakai.
         </p>
+        <div className="empty-state" style={{ marginBottom: 16 }}>
+          Untuk UAT BOARD gunakan tepat: <strong>nofilanirahmawan+uat-board@gmail.com</strong>
+        </div>
         <form action={generateUatRecoveryLinkAction} className="form-stack">
           <div className="field">
-            <label htmlFor="uat-recovery-email">Email user operasional</label>
+            <label htmlFor="uat-recovery-email">Email user UAT</label>
             <input id="uat-recovery-email" name="email" type="email" required autoComplete="off" placeholder="nama+uat-role@gmail.com" />
           </div>
           <button className="primary-button" type="submit">Buat Recovery Link &amp; Lanjut Aktivasi</button>
