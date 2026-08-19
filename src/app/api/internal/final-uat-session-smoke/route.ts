@@ -171,17 +171,20 @@ export async function GET(request: NextRequest) {
 
     let negativeWrite: Record<string, unknown>;
     if (actor.role === "SUPERVISOR") {
-      const denied = await rpc("soft_close_accounting_period", {
+      const denied = await rpc("create_manual_journal_draft", {
         p_accounting_period_id: period.id,
-        p_idempotency_key: "uat-g1-supervisor-negative-soft-close",
-        p_reason: "Release-1 Gate 1 negative write — SUPERVISOR must not manage accounting periods",
+        p_entry_date: "2026-08-19",
+        p_description: "Release-1 Gate 1 negative write — SUPERVISOR must not create Accounting draft",
+        p_lines: [],
+        p_idempotency_key: "uat-g1-supervisor-negative-accounting-draft",
+        p_source_reference: "UAT-G1-NEGATIVE",
       });
-      const deniedCorrectly = Boolean(denied.error?.message.includes("ACCOUNTING_PERIOD_MANAGE_DENIED"));
+      const deniedCorrectly = Boolean(denied.error?.message.includes("ACCOUNTING_DRAFT_CREATE_DENIED"));
       if (!deniedCorrectly) {
         await client.auth.signOut();
         return noStoreJson({ error: "supervisor-negative-write-failed", detail: denied.error?.message ?? null }, 500);
       }
-      negativeWrite = { action: "soft_close_accounting_period", denied: true, expected: "ACCOUNTING_PERIOD_MANAGE_DENIED" };
+      negativeWrite = { action: "create_manual_journal_draft", denied: true, expected: "ACCOUNTING_DRAFT_CREATE_DENIED" };
     } else {
       const denied = await rpc("get_accounting_dashboard_snapshot");
       const deniedCorrectly = Boolean(denied.error?.message.includes("ACCOUNTING_VIEW_DENIED"));
