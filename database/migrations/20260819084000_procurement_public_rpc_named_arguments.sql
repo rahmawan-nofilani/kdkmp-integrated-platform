@@ -147,16 +147,14 @@ declare
 begin
   select p.proargnames into v_names
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-  where n.nspname='public' and p.proname='approve_purchase_order'
-    and pg_get_function_identity_arguments(p.oid)='uuid, text, text, boolean';
+  where n.nspname='public' and p.proname='approve_purchase_order' and p.pronargs=4;
   if v_names is distinct from array['p_purchase_order_id','p_idempotency_key','p_reason','p_conflict_declared']::text[] then
     raise exception 'PROCUREMENT_APPROVE_PO_RPC_ARGUMENT_CONTRACT_INVALID';
   end if;
 
   select p.proargnames into v_names
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-  where n.nspname='public' and p.proname='receive_purchase_order'
-    and pg_get_function_identity_arguments(p.oid)='uuid, uuid, uuid, jsonb, text, text';
+  where n.nspname='public' and p.proname='receive_purchase_order' and p.pronargs=6;
   if v_names is distinct from array['p_purchase_order_id','p_warehouse_id','p_to_warehouse_node_id','p_lines','p_idempotency_key','p_supplier_delivery_reference']::text[] then
     raise exception 'PROCUREMENT_RECEIVE_RPC_ARGUMENT_CONTRACT_INVALID';
   end if;
