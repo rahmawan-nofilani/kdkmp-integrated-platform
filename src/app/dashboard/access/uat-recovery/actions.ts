@@ -64,7 +64,7 @@ export async function generateUatRecoveryLinkAction(formData: FormData) {
     redirect("/dashboard/access/uat-recovery?error=lookup-failed");
   }
 
-  const roleCodes = (roleAssignments ?? []).map((assignment) => assignment.roles?.code).filter(Boolean);
+  const roleCodes = (roleAssignments ?? []).flatMap((assignment) => (assignment.roles ?? []).map((role) => role.code));
   if (roleCodes.includes("MANAGER") || roleCodes.includes("BOARD")) {
     redirect("/dashboard/access/uat-recovery?error=protected-user");
   }
