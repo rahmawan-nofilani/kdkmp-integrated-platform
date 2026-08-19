@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireAccessContext } from "@/lib/auth/access-context";
 import { requirePermission } from "@/lib/auth/permissions";
+import { asProcurementClient } from "@/types/procurement";
 import { runUatThreeWayMatchAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -17,17 +18,21 @@ const errorMessages: Record<string, string> = {
 };
 
 export default async function UatProcurementMatchPage({ searchParams }: { searchParams: Promise<{ error?: string; success?: string }> }) {
-  await requirePermission("PURCHASE_INVOICE_CREATE");
   await requirePermission("PURCHASE_MATCH");
-  const { profile, supabase } = await requireAccessContext();
+  const { profile, permissionCodes, supabase } = await requireAccessContext();
   const params = await searchParams;
+
+  if (!permissionCodes.includes("PURCHASE_INVOICE_CREATE")) {
+    return <section className="panel"><h3>Akses FINANCE UAT tidak tersedia</h3><p className="panel-subtitle">Akun tidak memiliki PURCHASE_INVOICE_CREATE.</p></section>;
+  }
 
   const organizationResult = profile.organization_id
     ? await supabase.from("organizations").select("code,name").eq("id", profile.organization_id).maybeSingle()
     : { data: null, error: null };
 
+  const db = asProcurementClient(supabase);
   const poResult = profile.organization_id
-    ? await supabase
+    ? await db
         .from("purchase_orders")
         .select("id,po_number,status,currency")
         .eq("organization_id", profile.organization_id)
@@ -37,15 +42,15 @@ export default async function UatProcurementMatchPage({ searchParams }: { search
 
   const po = poResult.data;
   const linesResult = po
-    ? await supabase.from("purchase_order_lines").select("id,description,ordered_quantity,unit_price,line_total").eq("purchase_order_id", po.id).order("line_no")
+    ? await db.from("purchase_order_lines").select("id,description,ordered_quantity,unit_price,line_total").eq("purchase_order_id", po.id).order("line_no")
     : { data: [], error: null };
   const lines = linesResult.data ?? [];
 
   const exactInvoice = po
-    ? await supabase.from("supplier_invoices").select("invoice_number,status,matching_status,total_amount").eq("purchase_order_id", po.id).eq("invoice_number", "UAT-INV-G6-MATCH-001").maybeSingle()
+    ? await db.from("supplier_invoices").select("invoice_number,status,matching_status,total_amount").eq("purchase_order_id", po.id).eq("invoice_number", "UAT-INV-G6-MATCH-001").maybeSingle()
     : { data: null, error: null };
   const mismatchInvoice = po
-    ? await supabase.from("supplier_invoices").select("invoice_number,status,matching_status,total_amount").eq("purchase_order_id", po.id).eq("invoice_number", "UAT-INV-G6-MISMATCH-001").maybeSingle()
+    ? await db.from("supplier_invoices").select("invoice_number,status,matching_status,total_amount").eq("purchase_order_id", po.id).eq("invoice_number", "UAT-INV-G6-MISMATCH-001").maybeSingle()
     : { data: null, error: null };
 
   return (
