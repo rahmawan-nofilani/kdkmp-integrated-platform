@@ -149,7 +149,7 @@ export async function GET(request: NextRequest) {
     token_hash: tokenHash,
     type: "recovery",
   });
-  if (verifyError || !verified.session || verified.user.email?.toLowerCase() !== FINANCE_EMAIL) {
+  if (verifyError || !verified.session || !verified.user || verified.user.email?.toLowerCase() !== FINANCE_EMAIL) {
     return noStoreJson({ error: "finance-session-verification-failed" }, 500);
   }
 
