@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const ASSIGNABLE_ROLES = new Set(["CASHIER", "TELLER", "FINANCE_OFFICER", "SUPERVISOR"]);
+const DEVELOPMENT_ORG_CODE = "DEMO-KDKMP-DEV";
 
 type AdminRpcResult = { data: unknown; error: { message: string } | null };
 
@@ -42,6 +43,11 @@ async function requireManagerContext(requiredPermissions: Array<"USER_CREATE" | 
   const context = await requireAccessContext();
   if (!context.profile.organization_id) accessRedirect("error", "actor-scope");
   return context;
+}
+
+async function requireDevelopmentOrganization(admin: ReturnType<typeof createAdminClient>, organizationId: string) {
+  const { data, error } = await admin.from("organizations").select("code").eq("id", organizationId).maybeSingle();
+  if (error || data?.code !== DEVELOPMENT_ORG_CODE) accessRedirect("error", "uat-development-only");
 }
 
 function mapDbError(message: string) {
@@ -107,6 +113,7 @@ export async function inviteOperationalUserAction(formData: FormData) {
   }
 
   const admin = createAdminClient();
+  await requireDevelopmentOrganization(admin, profile.organization_id!);
   const { data: generated, error: generateError } = await admin.auth.admin.generateLink({
     type: "invite",
     email,
@@ -204,6 +211,7 @@ export async function bootstrapFirstBoardUatAction(formData: FormData) {
   if (!email || !email.includes("@") || !fullName || !dataScopeId || !reason) accessRedirect("error", "invalid-board-bootstrap");
 
   const admin = createAdminClient();
+  await requireDevelopmentOrganization(admin, profile.organization_id!);
   const { data: generated, error: generateError } = await admin.auth.admin.generateLink({
     type: "invite",
     email,
