@@ -1,242 +1,114 @@
-# Current Project Status — Release 1 UAT Readiness
+# Current Project Status — Release 1 DEVELOPMENT RC1 / Production Readiness
 
-Date: 2026-08-18  
+Date: 2026-08-19  
 Repository: `rahmawan-nofilani/kdkmp-integrated-platform`  
-Environment classification: **DEVELOPMENT**  
+Current runtime classification: **DEVELOPMENT**  
 Production cutover: **NOT AUTHORIZED**
 
 ## Executive checkpoint
 
-KDKMP has moved from foundation-building into **Release 1 UAT preparation**. Core CASH POS financial flows, controlled reversals/returns, Accounting segregation of duties, manual journal posting/reversal/period-close, Accounting UX, and global interaction feedback are implemented and CI-proven.
+Release-1 DEVELOPMENT UAT is complete. The accepted DEVELOPMENT candidate is frozen at branch `release/release1-development-rc1` on SHA `dea88ababa10de327a795a594adabf654cae197c`.
 
-The next major milestone is one deliberate DEVELOPMENT deployment followed by role-by-role UAT. Real QRIS/BANK_TRANSFER operation remains intentionally blocked until Xendit credentials, merchant/commercial terms, provider configuration, and accounting clearing mappings are explicitly authorized.
+Issue #129 (Release-1 DEVELOPMENT UAT) is completed. Issue #183 (RC1 freeze/demo stabilization) is completed. The next active coordination tracker is Issue #184 for Production Readiness, staging/environment separation, and future cutover gates.
 
-Canonical UAT plan: `docs/operations/release1-uat-readiness.md`.
+This checkpoint does not authorize production infrastructure, provider credentials, production data onboarding, a custom production domain, or production cutover.
 
-## Current repository checkpoint
+## Accepted DEVELOPMENT evidence
 
-Recent completed milestones:
+Release-1 gates:
 
-- PR #114 — fail-closed Xendit webhook adapter foundation.
-- PR #115–#119 — Zero-Cost dashboard/read-path optimizations, including Accounting snapshot consolidation.
-- PR #120 — controlled manual journal command engine.
-- PR #121 — BOARD-only `ACCOUNTING_POST` SoD + controlled `JOURNAL_POST` approval.
-- PR #122 — controlled manual journal reversal + period close.
-- PR #123 — reversal/period-close private helper ACL hardening.
-- PR #124 — Accounting reversal wizard + period-close checklist.
-- PR #125 — multi-line journal editor + reconciliation drill-down.
-- PR #126 — Accounting discoverability + loading feedback.
-- PR #127 — global interaction feedback + reduced-motion hardening.
+- Gate 0 deployment/environment integrity: PASS;
+- Gate 1 Auth/RBAC/scope: PASS with distinct UAT actors and negative-write controls;
+- Gate 2 POS CASH: PASS;
+- Gate 3 full reversal + partial return/refund: PASS;
+- Gate 4 Accounting maker/checker/BOARD poster: PASS;
+- Gate 5 Accounting reversal + controlled period close: PASS;
+- Gate 6 Inventory/Procurement accepted Release-1 scope: PASS;
+- Gate 7 Savings/Loan monetary operation: `DEFERRED_REGULATORY_PRODUCT_GATE`, tracked in Issue #182;
+- Gate 8 reconciliation/audit: PASS;
+- Gate 9 responsive/accessibility/browser: PASS in authenticated Headless Chromium 138 for UAT-9001..9006;
+- Gate 10 provider boundary: PASS for fail-closed readiness; real provider E2E remains separately blocked by credential/commercial authorization.
 
-Issue #31 (Accounting SoD) is completed.  
-Issue #32 (Accounting richer UX) is completed.  
-Issue #18 (global UX feedback/micro-interactions) is completed.
+No unresolved application P0/P1 defect was identified at the UAT close decision.
 
-## Implemented operational capability
+## Current infrastructure position
 
-### Architecture, identity, access
+### Vercel
 
-- secure authentication/session foundation;
-- protected application shell;
-- organization hierarchy and scoped data access;
-- RBAC and privileged-permission resolution;
-- manager bootstrap/control workspace;
-- audit foundations;
-- zero-cost capacity/backup/archive foundations.
+Current application project:
 
-### Cooperative and finance foundations
+- `kdkmp-development`
+- project ID `prj_ITkValMHsXHflGI0qKLHoCgYYB9n`
+- canonical DEVELOPMENT runtime remains separate from any future production decision;
+- Git auto-deploy guard is intentionally disabled (`deploymentEnabled=false`) under the Zero-Cost policy.
 
-- cooperative/member foundation;
-- membership finance ledger foundation;
-- savings/loan/product configuration foundations;
-- teller/payment orchestration foundations;
-- Accounting COA, periods, journal, reconciliation, approvals, and SoD controls.
+No dedicated `kdkmp-staging` or `kdkmp-production` Vercel project has been created by this production-readiness checkpoint.
 
-### Inventory / procurement / logistics
+### Supabase
 
-- inventory and warehouse foundations;
-- procurement, PO, receiving, GRNI and three-way-match foundations;
-- logistics/distribution foundations including dispatch/POD/route/fleet structures.
+Authoritative integrated-platform DEVELOPMENT project:
 
-### POS CASH
+- project ref `qdxybbcksjivcidsupbd`;
+- region `ap-south-1` (Mumbai);
+- status healthy at the Production Readiness Phase-0 audit.
 
-Operational foundations include:
+Issue #19 remains open to evaluate staging/region architecture before data volume grows. Singapore (`ap-southeast-1`) is the candidate region to evaluate for Indonesian users, but no database/project move is authorized yet.
 
-- cashier-first workspace and mobile navigation;
-- active shift and terminal controls;
-- searchable scoped catalog;
-- server-authoritative cart pricing/totals;
-- idempotent cart commands;
-- optional member/customer association;
-- atomic CASH sale completion;
-- payment SETTLED;
-- inventory SALE_ISSUE;
-- POSTED accounting journal;
-- POS cash movement;
-- authoritative receipt;
-- completed-sale full CASH reversal/void;
-- controlled partial item return/refund;
-- append-only financial/inventory/accounting history.
-
-Baseline privileged POS policy:
-
-- `SALES_VOID`: MANAGER only;
-- `SALES_RETURN`: MANAGER only;
-- CASHIER receives neither permission.
-
-### POS non-cash foundation
-
-Implemented but intentionally inactive operationally:
-
-- provider-neutral trusted confirmation engine;
-- service-role-only provider confirmation;
-- idempotent/replay-safe provider event handling;
-- `SETTLEMENT_PENDING` clearing-account model;
-- settlement reconciliation, mismatch exception, and fee-journal foundation;
-- fail-closed Xendit webhook adapter foundation for QRIS / selected VA mapping.
-
-Not activated:
-
-- Xendit credentials/business ID/callback token;
-- real provider config;
-- provider fee/MDR contract;
-- final clearing/bank/fee accounting mappings;
-- QRIS/BANK_TRANSFER payment UI completion.
-
-Screenshot/manual cashier input is never accepted as proof of non-cash payment.
-
-## Accounting operational state
-
-Release-1 SoD is now:
-
-- `FINANCE_OFFICER` = Maker / DRAFT and manual reversal DRAFT;
-- `MANAGER` = Checker / VALIDATE and period SOFT_CLOSE;
-- `BOARD` = Authorize + POST and period HARD_CLOSE;
-- `SUPERVISOR` = read/review/audit only.
-
-Controls include:
-
-- Maker ≠ Checker ≠ Poster;
-- BOARD authorization required for posting;
-- posting actor binding to authorizing BOARD actor;
-- posted journals immutable;
-- manual reversal is append-only and links to immutable source;
-- non-manual journal reversal remains domain-engine owned;
-- duplicate active reversal blocked;
-- period close blocked by unposted journals, open Accounting approvals, unresolved reconciliation, imbalance, or premature date;
-- Manager soft-close and distinct BOARD hard-close;
-- conflict declaration required for governance actions.
-
-Accounting UX now includes:
-
-- quick two-sided manual journal entry;
-- multi-line journal editor up to 20 lines;
-- live balance/line validation plus authoritative server/database revalidation;
-- journal validation and BOARD authorization/posting;
-- reversal wizard;
-- period-close checklist/actions;
-- reconciliation drill-down + exception register;
-- role-scoped navigation and loading feedback.
-
-## Zero-Cost status
-
-Issue #58 Zero-Cost parent tracker is completed.
-
-Binding conclusions:
-
-- Supabase DEVELOPMENT remains the hot DB/auth platform;
-- Vercel DEVELOPMENT remains the active web application platform;
-- automatic Vercel deployment is intentionally disabled to conserve build/deployment quota;
-- changes are batched before deliberate deployment milestones;
-- Cloudflare/OpenNext compatibility proof remains useful, but current full-stack SSR architecture is **NO-GO for true production on Workers Free** under the strict CPU gate;
-- no paid plan, R2, custom production domain, or automatic upgrade is authorized.
-
-## Environment position
-
-### Supabase DEVELOPMENT
-
-Project: `qdxybbcksjivcidsupbd`  
-Current region: `ap-south-1` (Mumbai).
-
-Applied DEVELOPMENT state includes POS cash completion/reversal/partial return policies, provider-neutral confirmation/reconciliation foundation, Zero-Cost read optimizations, Accounting journal command engine, BOARD posting SoD, controlled reversal/period close, and ACL hardening.
-
-Do not rewrite applied migration history. Remote connector timestamps may differ from canonical repository filenames; reconciled historical metadata remains valid.
-
-### Vercel DEVELOPMENT
-
-Project: `kdkmp-development` (`prj_ITkValMHsXHflGI0qKLHoCgYYB9n`).
-
-Git auto-deploy remains disabled for Zero-Cost conservation. Recent repository milestones therefore may be ahead of the currently online DEVELOPMENT deployment. This is intentional until the deliberate Release-1 UAT deployment is explicitly authorized.
+A different Supabase project belonging to another KDKMP workstream/repository must not be silently reused or reclassified as this integrated platform's staging/production database.
 
 ### Cloudflare
 
-Compatibility/build proof remains part of CI. It is not an authorization to deploy or cut over production.
+The DEVELOPMENT compatibility pilot remains useful evidence, but Cloudflare Workers Free is still **NO-GO** for the current full-stack SSR production runtime because its measured strict CPU gate did not pass.
 
-## Open blockers / decisions
+Do not weaken auth/RLS/RBAC/scope/audit controls to force the architecture into that limit.
 
-### Issue #51 — POS Transaction Command Engine
+## Production-readiness Phase 0
 
-Still open because real non-cash operation is credential/commercial-bound.
+The repository now moves to explicit environment separation.
 
-Remaining meaningful work:
+Canonical variables:
 
-- Xendit Test Mode account/credential authorization;
-- bind payment initiation to provider payment request/reference;
-- real sandbox QRIS/VA end-to-end simulation;
-- webhook positive/negative verification with authorized credentials;
-- provider settlement ingest/reconciliation adapter;
-- actual merchant classification + MDR/processing/VAT terms;
-- final clearing/bank/fee account mappings;
-- DEVELOPMENT UI activation only after all gates pass;
-- optional offline draft queue/conflict handling remains later work; offline payment confirmation is prohibited.
+- `KDKMP_APP_ENV=development|staging|production`;
+- `KDKMP_EXPECTED_SUPABASE_REF=<project-ref>`.
 
-### Issue #19 — Supabase region / staging architecture
+Existing DEVELOPMENT may safely default to `development`. STAGING/PRODUCTION must opt in explicitly and must pin the expected Supabase project ref. `/api/health` is required to fail closed for a non-development environment with a missing/mismatched database target.
 
-Current DEVELOPMENT is Mumbai while primary users are in Indonesia. Before staging/data volume grows, evaluate Singapore (`ap-southeast-1`) with:
+Canonical production-readiness plan:
 
-- backup/restore evidence;
-- complete migration replay;
-- latency comparison;
-- cutover/rollback plan;
-- explicit authorization before moving any data.
+- `docs/operations/release1-production-readiness.md`
 
-No region migration is authorized by this document.
+## Open external/regulatory boundaries
 
-## Release 1 UAT milestone
+### Issue #182 — Savings/Loan regulatory/product activation
 
-Repository preparation uses `docs/operations/release1-uat-readiness.md` as the canonical test matrix.
+Current monetary Savings/Loan operation remains intentionally unavailable until regulatory/product requirements are validated. Draft products must not be force-activated for demonstration or release metrics.
 
-Planned execution:
+### Issue #51 — real non-cash provider operation
 
-1. freeze a green `main` SHA;
-2. explicitly authorize one deliberate Vercel DEVELOPMENT deployment;
-3. verify DEVELOPMENT environment integrity;
-4. create/verify distinct UAT actors without weakening RBAC;
-5. execute authentication/scope, POS CASH, return/void, Accounting, inventory/procurement, cooperative/teller, reconciliation/audit, and browser/mobile/accessibility gates;
-6. record P0/P1/P2/P3 defects and evidence;
-7. fix in batched branch → PR → CI → merge cycles;
-8. keep real provider tests marked blocked until provider authorization;
-9. evaluate staging/region only after UAT evidence is stable;
-10. production remains a separate future gate.
+QRIS/BANK_TRANSFER remain fail-closed until authorized provider credentials/test mode, trusted backend confirmation, provider configuration, commercial/MDR terms, accounting mappings, settlement reconciliation, and E2E evidence exist.
 
-## Current readiness estimate
+Screenshot/manual cashier input is never authoritative proof of a non-cash payment.
 
-This is an engineering estimate, not a certification:
+## Immediate next work
 
-- Release-1 DEVELOPMENT implementation/readiness: **approximately 93–94%**;
-- true production readiness: **approximately 70–73%**.
+Without creating new infrastructure, Production Readiness may continue with:
 
-The gap is now dominated less by core code and more by UAT evidence, provider activation, staging/region/recovery decisions, and production cutover controls.
+1. repository/environment hardening;
+2. migration, backup/restore and security inventory;
+3. Issue #19 region/staging architecture decision;
+4. staging resource naming, secret ownership and rollback planning;
+5. staging creation cost/authorization boundary;
+6. future abbreviated staging replay of the accepted Release-1 UAT gates.
+
+Creating a new Supabase project/branch, enabling paid resources, creating true production infrastructure, assigning a production domain, onboarding real data, or performing production cutover remains a separate explicit owner authorization boundary.
 
 ## Binding continuation controls
 
-- Preserve branch → PR → CI → merge.
+- Preserve branch → PR → CI/build proof → merge.
 - Never write directly to `main`.
-- Require focused/full database CI for executable migrations.
-- Never rewrite already-applied migration history.
-- Do not weaken JWT, RLS, RBAC, scope, audit, Accounting SoD, or provider verification for convenience/performance.
-- Do not expose service-role/provider secrets to browser code.
-- Do not enable real QRIS/BANK_TRANSFER completion without trusted provider credentials + server verification.
-- Do not onboard real production data without explicit readiness approval.
-- Do not create/enable paid resources, custom production infrastructure, or true production without explicit owner authorization.
-- Keep authoritative financial state server-owned; offline final payment confirmation is prohibited.
+- Never rewrite applied migration history.
+- Keep DEVELOPMENT, future STAGING, and future PRODUCTION database/auth/secrets isolated.
+- Never expose service-role/provider secrets in browser code, repository content, UAT evidence, or chat.
+- Do not weaken JWT, RLS, RBAC, scope, audit, Accounting SoD, provider verification, idempotency, or append-only financial history.
+- Keep authoritative financial state server-owned.
+- No real production data or true production cutover without a fresh explicit authorization after readiness evidence is reviewed.
