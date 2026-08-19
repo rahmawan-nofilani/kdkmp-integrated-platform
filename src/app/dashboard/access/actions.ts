@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const ASSIGNABLE_ROLES = new Set(["CASHIER", "TELLER", "FINANCE_OFFICER", "SUPERVISOR"]);
+const DEVELOPMENT_ORG_CODE = "DEMO-KDKMP-DEV";
 
 type AdminRpcResult = { data: unknown; error: { message: string } | null };
 
@@ -29,11 +30,24 @@ function accessRedirect(kind: "error" | "success", code: string): never {
   redirect(`/dashboard/access?${kind}=${encodeURIComponent(code)}`);
 }
 
+function activationPath(actionLink: string | null | undefined, type: "invite" | "recovery") {
+  if (!actionLink) return null;
+  const parsed = new URL(actionLink);
+  const tokenHash = parsed.searchParams.get("token") ?? parsed.searchParams.get("token_hash");
+  if (!tokenHash) return null;
+  return `/activate?token_hash=${encodeURIComponent(tokenHash)}&type=${encodeURIComponent(type)}`;
+}
+
 async function requireManagerContext(requiredPermissions: Array<"USER_CREATE" | "USER_UPDATE" | "USER_SUSPEND" | "USER_ARCHIVE" | "ROLE_ASSIGN" | "SCOPE_ASSIGN">) {
   for (const permission of requiredPermissions) await requirePermission(permission);
   const context = await requireAccessContext();
   if (!context.profile.organization_id) accessRedirect("error", "actor-scope");
   return context;
+}
+
+async function requireDevelopmentOrganization(admin: ReturnType<typeof createAdminClient>, organizationId: string) {
+  const { data, error } = await admin.from("organizations").select("code").eq("id", organizationId).maybeSingle();
+  if (error || data?.code !== DEVELOPMENT_ORG_CODE) accessRedirect("error", "uat-development-only");
 }
 
 function mapDbError(message: string) {
@@ -99,11 +113,20 @@ export async function inviteOperationalUserAction(formData: FormData) {
   }
 
   const admin = createAdminClient();
-  const { data: invite, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { full_name: fullName },
+  await requireDevelopmentOrganization(admin, profile.organization_id!);
+  const { data: generated, error: generateError } = await admin.auth.admin.generateLink({
+    type: "invite",
+    email,
+    options: { data: { full_name: fullName } },
   });
-  if (inviteError || !invite.user?.id) {
-    console.error("Access invitation failed", inviteError?.message ?? "missing invited user");
+  if (generateError || !generated.user?.id) {
+    console.error("Access direct invite link generation failed", generateError?.message ?? "missing invited user");
+    accessRedirect("error", "invite-failed");
+  }
+
+  const path = activationPath(generated.properties?.action_link, "invite");
+  if (!path) {
+    console.error("Access direct invite link missing token");
     accessRedirect("error", "invite-failed");
   }
 
@@ -111,7 +134,7 @@ export async function inviteOperationalUserAction(formData: FormData) {
   const { error } = await rpc("execute_access_admin_command", {
     p_actor_profile_id: profile.id,
     p_command_type: "PROVISION_USER",
-    p_target_auth_user_id: invite.user.id,
+    p_target_auth_user_id: generated.user.id,
     p_target_profile_id: null,
     p_full_name: fullName,
     p_phone: phone || null,
@@ -121,10 +144,11 @@ export async function inviteOperationalUserAction(formData: FormData) {
     p_idempotency_key: idempotencyKey,
   });
   if (error) {
-    console.error("Access provisioning failed after Auth invite; invited profile remains fail-closed PENDING if DB command rolled back", error.message);
+    console.error("Access provisioning failed after direct Auth link generation; profile remains fail-closed if DB command rolled back", error.message);
     accessRedirect("error", mapDbError(error.message));
   }
-  accessRedirect("success", "user-invited");
+
+  redirect(path);
 }
 
 export async function updateOperationalUserAction(formData: FormData) {
@@ -187,18 +211,27 @@ export async function bootstrapFirstBoardUatAction(formData: FormData) {
   if (!email || !email.includes("@") || !fullName || !dataScopeId || !reason) accessRedirect("error", "invalid-board-bootstrap");
 
   const admin = createAdminClient();
-  const { data: invite, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-    data: { full_name: fullName },
+  await requireDevelopmentOrganization(admin, profile.organization_id!);
+  const { data: generated, error: generateError } = await admin.auth.admin.generateLink({
+    type: "invite",
+    email,
+    options: { data: { full_name: fullName } },
   });
-  if (inviteError || !invite.user?.id) {
-    console.error("First BOARD Auth invitation failed", inviteError?.message ?? "missing invited user");
+  if (generateError || !generated.user?.id) {
+    console.error("First BOARD direct Auth link generation failed", generateError?.message ?? "missing invited user");
+    accessRedirect("error", "invite-failed");
+  }
+
+  const path = activationPath(generated.properties?.action_link, "invite");
+  if (!path) {
+    console.error("First BOARD direct Auth link missing token");
     accessRedirect("error", "invite-failed");
   }
 
   const rpc = admin.rpc.bind(admin) as unknown as (fn: string, args: Record<string, unknown>) => Promise<AdminRpcResult>;
   const { error } = await rpc("bootstrap_first_board_uat", {
     p_actor_profile_id: profile.id,
-    p_target_auth_user_id: invite.user.id,
+    p_target_auth_user_id: generated.user.id,
     p_full_name: fullName,
     p_phone: phone || null,
     p_data_scope_id: dataScopeId,
@@ -206,8 +239,9 @@ export async function bootstrapFirstBoardUatAction(formData: FormData) {
     p_idempotency_key: idempotencyKey,
   });
   if (error) {
-    console.error("First BOARD provisioning failed after Auth invite", error.message);
+    console.error("First BOARD provisioning failed after direct Auth link generation", error.message);
     accessRedirect("error", mapDbError(error.message));
   }
-  accessRedirect("success", "first-board-created");
+
+  redirect(path);
 }
