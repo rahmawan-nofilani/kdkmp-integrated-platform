@@ -91,10 +91,14 @@ where r.code='MANAGER'
     '36000000-0000-4000-8000-000000000002',
     '36000000-0000-4000-8000-000000000003');
 
-insert into public.members(organization_id,organization_node_id,full_name,status)
-values
-  (:'org_a'::uuid,:'node_a'::uuid,'CI Synthetic Member A','ACTIVE'),
-  (:'org_b'::uuid,:'node_b'::uuid,'CI Synthetic Member B','ACTIVE');
+-- Create fixtures through the real authenticated member-write path.
+-- Do not bypass member triggers or disable RLS for this test.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','36000000-0000-4000-8000-000000000001',true);
+select public.create_member('CI Synthetic Member A',null,null,:'node_a'::uuid);
+select set_config('request.jwt.claim.sub','36000000-0000-4000-8000-000000000002',true);
+select public.create_member('CI Synthetic Member B',null,null,:'node_b'::uuid);
+reset role;
 
 -- Check delegated scope from trusted context only.
 select pg_temp.assert_true(
