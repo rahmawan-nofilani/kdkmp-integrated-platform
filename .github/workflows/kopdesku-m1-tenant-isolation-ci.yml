@@ -1,0 +1,79 @@
+name: KopdesKu M1 - Tenant Isolation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'database/migrations/**'
+      - 'database/tests/kopdesku_m1_tenant_scope_negative.sql'
+      - 'database/seeds/001_development_demo_organization.sql'
+      - '.github/workflows/kopdesku-m1-tenant-isolation-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/migrations/**'
+      - 'database/tests/kopdesku_m1_tenant_scope_negative.sql'
+      - 'database/seeds/001_development_demo_organization.sql'
+      - '.github/workflows/kopdesku-m1-tenant-isolation-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tenant-negative-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      SUPABASE_CLI_VERSION: '2.113.0'
+      LOCAL_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare disposable database migrations
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s database/migrations/20261111080000_kopdesku_m1_business_scope_isolation.sql
+          test -s database/tests/kopdesku_m1_tenant_scope_negative.sql
+          ACTUAL_VERSION="$(npx --yes "supabase@${SUPABASE_CLI_VERSION}" --version | tr -d '\r')"
+          test "$ACTUAL_VERSION" = "$SUPABASE_CLI_VERSION"
+          WORKDIR="$RUNNER_TEMP/kopdesku-m1-tenants"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" init >/dev/null
+          mkdir -p supabase/migrations
+          cp "$GITHUB_WORKSPACE"/database/migrations/*.sql supabase/migrations/
+          # Existing accounting migration needs the historical demo fixture.
+          cp "$GITHUB_WORKSPACE"/database/seeds/001_development_demo_organization.sql \
+            supabase/migrations/20260811100000_ci_historical_demo_bootstrap.sql
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+
+      - name: Replay all migrations in disposable Supabase
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ steps.prepare.outputs.workdir }}"
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" start
+
+      - name: Test tenant and platform negative access
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v psql >/dev/null 2>&1; then
+            psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/tests/kopdesku_m1_tenant_scope_negative.sql
+          else
+            docker run --rm --network host \
+              -v "$GITHUB_WORKSPACE":/work:ro -w /work \
+              postgres:17-alpine \
+              psql "$LOCAL_DB_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/tests/kopdesku_m1_tenant_scope_negative.sql
+          fi
+
+      - name: Stop disposable Supabase
+        if: always()
+        shell: bash
+        run: |
+          cd "${{ steps.prepare.outputs.workdir }}" || exit 0
+          npx --yes "supabase@${SUPABASE_CLI_VERSION}" stop --no-backup || true
